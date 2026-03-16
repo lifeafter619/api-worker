@@ -300,14 +300,19 @@ jobs:
             echo "✅ Queue 已存在: usage-events"
           else
             echo "创建 Queue: usage-events"
+            CREATE_OUTPUT=""
+            CREATE_STATUS=0
+            set +e
             CREATE_OUTPUT=$(bunx wrangler queues create usage-events --config apps/worker/wrangler.toml 2>&1)
             CREATE_STATUS=$?
+            set -e
             if [ $CREATE_STATUS -eq 0 ]; then
               echo "✅ Queue 已创建: usage-events"
             else
               if echo "$CREATE_OUTPUT" | grep -qi "already exists"; then
                 echo "✅ Queue 已存在: usage-events"
               else
+                echo "❌ 队列创建失败，输出如下："
                 echo "$CREATE_OUTPUT"
                 exit $CREATE_STATUS
               fi
@@ -453,14 +458,19 @@ jobs:
             echo "✅ Queue 已存在: usage-events"
           else
             echo "创建 Queue: usage-events"
+            CREATE_OUTPUT=""
+            CREATE_STATUS=0
+            set +e
             CREATE_OUTPUT=$(bunx wrangler queues create usage-events --config apps/worker/wrangler.toml 2>&1)
             CREATE_STATUS=$?
+            set -e
             if [ $CREATE_STATUS -eq 0 ]; then
               echo "✅ Queue 已创建: usage-events"
             else
               if echo "$CREATE_OUTPUT" | grep -qi "already exists"; then
                 echo "✅ Queue 已存在: usage-events"
               else
+                echo "❌ 队列创建失败，输出如下："
                 echo "$CREATE_OUTPUT"
                 exit $CREATE_STATUS
               fi

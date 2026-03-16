@@ -199,6 +199,9 @@
 
 ### 快速修改
 
+- **[ci]**: 队列创建失败时输出完整错误信息 — by lsy
+  - 类型: 快速修改（无方案包）
+  - 文件: .github/workflows/deploy.yml:263-320,416-473
 - **[ci]**: 修复队列检查脚本的 heredoc 缩进导致的 YAML 解析失败 — by lsy
   - 类型: 快速修改（无方案包）
   - 文件: .github/workflows/deploy.yml:263-316,416-469
