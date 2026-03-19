@@ -34,7 +34,7 @@ const parseArgs = () => {
 	const options = {
 		action: null,
 		target: "auto",
-		migrate: "auto",
+		migrate: "true",
 		config: DEFAULT_CONFIG,
 		skipInstall: false,
 	};
@@ -81,13 +81,13 @@ const printHelp = () => {
 		"  node scripts/deploy.mjs init [--target both] [--migrate true]",
 	);
 	console.log(
-		"  node scripts/deploy.mjs update [--target auto] [--migrate auto]",
+		"  node scripts/deploy.mjs update [--target auto] [--migrate true]",
 	);
 	console.log("");
 	console.log("Options:");
 	console.log("  --action init|update    部署动作（可用位置参数替代）");
 	console.log("  --target frontend|backend|both|auto");
-	console.log("  --migrate true|false|auto");
+	console.log("  --migrate true|false|auto (默认 true)");
 	console.log("  --config <path>         wrangler.toml 路径");
 	console.log("  --skip-install          跳过 bun install");
 	console.log("");
