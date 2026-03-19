@@ -1,9 +1,9 @@
-import { safeJsonParse } from "./json";
 import {
 	normalizeUsageViaWasm,
 	parseUsageFromJsonViaWasm,
 	parseUsageFromSseLineViaWasm,
 } from "../wasm/core";
+import { safeJsonParse } from "./json";
 
 export type NormalizedUsage = {
 	totalTokens: number;
@@ -14,6 +14,7 @@ export type NormalizedUsage = {
 export type StreamUsage = {
 	usage: NormalizedUsage | null;
 	firstTokenLatencyMs: number | null;
+	timedOut?: boolean;
 };
 
 export type StreamUsageMode = "full" | "lite" | "off";
@@ -21,6 +22,7 @@ export type StreamUsageMode = "full" | "lite" | "off";
 export type StreamUsageOptions = {
 	mode?: StreamUsageMode;
 	maxBytes?: number;
+	timeoutMs?: number;
 };
 
 const USAGE_HINTS = ['"usage"', '"usageMetadata"', '"usage_metadata"'];
@@ -96,17 +98,29 @@ export async function parseUsageFromSse(
 	options: StreamUsageOptions = {},
 ): Promise<StreamUsage> {
 	if (!response.body) {
-		return { usage: null, firstTokenLatencyMs: null };
+		return { usage: null, firstTokenLatencyMs: null, timedOut: false };
 	}
 	const mode: StreamUsageMode = options.mode ?? "full";
 	if (mode === "off") {
-		return { usage: null, firstTokenLatencyMs: null };
+		return { usage: null, firstTokenLatencyMs: null, timedOut: false };
 	}
 	const maxBytes =
 		typeof options.maxBytes === "number" && options.maxBytes > 0
 			? options.maxBytes
 			: Number.POSITIVE_INFINITY;
 	const reader = response.body.getReader();
+	const timeoutMs =
+		typeof options.timeoutMs === "number" && options.timeoutMs > 0
+			? Math.floor(options.timeoutMs)
+			: 0;
+	let timedOut = false;
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	if (timeoutMs > 0) {
+		timeoutId = setTimeout(() => {
+			timedOut = true;
+			reader.cancel().catch(() => undefined);
+		}, timeoutMs);
+	}
 	const decoder = new TextDecoder();
 	let buffer = "";
 	let usage: NormalizedUsage | null = null;
@@ -151,7 +165,10 @@ export async function parseUsageFromSse(
 						usage = wasmCandidate;
 						if (mode === "lite") {
 							await reader.cancel();
-							return { usage, firstTokenLatencyMs };
+							if (timeoutId) {
+								clearTimeout(timeoutId);
+							}
+							return { usage, firstTokenLatencyMs, timedOut };
 						}
 						newlineIndex = buffer.indexOf("\n");
 						continue;
@@ -175,10 +192,16 @@ export async function parseUsageFromSse(
 			const wasmCandidate = parseUsageFromSseLineViaWasm(remaining);
 			if (wasmCandidate) {
 				usage = wasmCandidate;
-				return { usage, firstTokenLatencyMs };
+				if (timeoutId) {
+					clearTimeout(timeoutId);
+				}
+				return { usage, firstTokenLatencyMs, timedOut };
 			}
 		}
 	}
 
-	return { usage, firstTokenLatencyMs };
+	if (timeoutId) {
+		clearTimeout(timeoutId);
+	}
+	return { usage, firstTokenLatencyMs, timedOut };
 }

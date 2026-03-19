@@ -26,6 +26,7 @@ import {
 	buildUpstreamImageRequest,
 	detectDownstreamProvider,
 	detectEndpointType,
+	type EndpointType,
 	type NormalizedChatRequest,
 	type NormalizedEmbeddingRequest,
 	type NormalizedImageRequest,
@@ -87,6 +88,10 @@ type ErrorDetails = {
 };
 
 const FAILURE_COUNT_THRESHOLD = 2;
+const USAGE_RESERVE_TIMEOUT_MS = 600;
+const USAGE_QUEUE_SEND_TIMEOUT_MS = 1500;
+const USAGE_RESERVE_BREAKER_MS = 60_000;
+const STREAM_USAGE_PARSE_TIMEOUT_MS = 20_000;
 
 let activeStreamUsageParsers = 0;
 
@@ -121,6 +126,31 @@ function getStreamUsageMaxParsers(settings: {
 	return maxParsers;
 }
 
+function withTimeout<T>(
+	task: Promise<T>,
+	timeoutMs: number,
+	timeoutCode: string,
+): Promise<T> {
+	if (timeoutMs <= 0) {
+		return task;
+	}
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			reject(new Error(timeoutCode));
+		}, timeoutMs);
+		task.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error) => {
+				clearTimeout(timer);
+				reject(error);
+			},
+		);
+	});
+}
+
 function createUsageEventScheduler(
 	c: { env: AppEnv["Bindings"]; executionCtx?: ExecutionContextLike },
 	settings: {
@@ -138,13 +168,16 @@ function createUsageEventScheduler(
 	const directRatio = settings.usage_queue_direct_write_ratio;
 	const dailyLimit = settings.usage_queue_daily_limit;
 	let overLimit = false;
-	let decisionChain = Promise.resolve();
+	let reserveBreakerUntil = 0;
 
-	const decide = async (): Promise<boolean> => {
+	const shouldUseQueue = async (): Promise<boolean> => {
 		if (!queueEnabled) {
 			return false;
 		}
 		if (overLimit) {
+			return false;
+		}
+		if (Date.now() < reserveBreakerUntil) {
 			return false;
 		}
 		if (Math.random() < directRatio) {
@@ -154,39 +187,60 @@ function createUsageEventScheduler(
 			return true;
 		}
 		try {
-			const result = await reserveUsageQueue(limiter, {
-				limit: dailyLimit,
-				amount: 1,
-			});
+			const result = await withTimeout(
+				reserveUsageQueue(limiter, {
+					limit: dailyLimit,
+					amount: 1,
+				}),
+				USAGE_RESERVE_TIMEOUT_MS,
+				"usage_reserve_timeout",
+			);
 			if (!result.allowed) {
 				overLimit = true;
+				console.warn("[usage-limiter:reserve_over_limit]", {
+					limit: dailyLimit,
+				});
 			}
 			return result.allowed;
 		} catch (error) {
+			reserveBreakerUntil = Date.now() + USAGE_RESERVE_BREAKER_MS;
 			console.warn("[usage-limiter:reserve_failed]", {
 				error: error instanceof Error ? error.message : String(error),
+				breaker_ms: USAGE_RESERVE_BREAKER_MS,
 			});
 			return false;
 		}
 	};
 
-	const decideSequential = () => {
-		const decision = decisionChain.then(decide);
-		decisionChain = decision.then(() => undefined).catch(() => undefined);
-		return decision;
-	};
-
 	return (event: UsageQueueEvent) => {
-		const task = decideSequential().then((useQueue) => {
+		const task = (async () => {
+			// usage 主日志永远走直写，避免队列或限流检查导致观测断流。
+			if (event.type === "usage") {
+				await processUsageQueueEvent(c.env.DB, event);
+				return;
+			}
+			const useQueue = await shouldUseQueue();
 			if (useQueue && queue) {
-				return queue.send(event).catch((error) => {
+				try {
+					await withTimeout(
+						queue.send(event),
+						USAGE_QUEUE_SEND_TIMEOUT_MS,
+						"usage_queue_send_timeout",
+					);
+					return;
+				} catch (error) {
 					console.warn("[usage-queue:send_failed]", {
 						error: error instanceof Error ? error.message : String(error),
+						fallback: "direct_write",
 					});
-					return processUsageQueueEvent(c.env.DB, event);
-				});
+				}
 			}
-			return processUsageQueueEvent(c.env.DB, event);
+			await processUsageQueueEvent(c.env.DB, event);
+		})().catch((error) => {
+			console.error("[usage:event_schedule_failed]", {
+				event_type: event.type,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		});
 		scheduleDbWrite(c, task);
 	};
@@ -714,6 +768,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 	let selectedResponse: Response | null = null;
 	let selectedChannel: ChannelRecord | null = null;
 	let selectedUpstreamProvider: ProviderType | null = null;
+	let selectedUpstreamEndpoint: EndpointType | null = null;
 	let selectedUpstreamModel: string | null = null;
 	let selectedRequestPath = targetPath;
 	let selectedImmediateUsage: NormalizedUsage | null = null;
@@ -1023,6 +1078,14 @@ proxy.all("/*", tokenAuth, async (c) => {
 				}
 				selectedChannel = channel;
 				selectedUpstreamProvider = upstreamProvider;
+				try {
+					selectedUpstreamEndpoint = detectEndpointType(
+						upstreamProvider,
+						responsePath,
+					);
+				} catch {
+					selectedUpstreamEndpoint = endpointType;
+				}
 				selectedUpstreamModel = upstreamModel;
 				selectedResponse = response;
 				selectedRequestPath = responsePath;
@@ -1195,11 +1258,21 @@ proxy.all("/*", tokenAuth, async (c) => {
 			.executionCtx;
 		const streamUsageOptions = getStreamUsageOptions(runtimeSettings);
 		const streamUsageMaxParsers = getStreamUsageMaxParsers(runtimeSettings);
+		let usageFinalized = false;
+		const finalizeUsage = (
+			options: Parameters<typeof recordAttemptUsage>[0],
+		) => {
+			if (usageFinalized) {
+				return;
+			}
+			usageFinalized = true;
+			recordAttemptUsage(options);
+		};
 		const canParseStream =
 			streamUsageOptions.mode !== "off" &&
 			activeStreamUsageParsers < streamUsageMaxParsers;
 		if (!canParseStream) {
-			recordAttemptUsage({
+			finalizeUsage({
 				channelId: selectedChannel.id,
 				requestPath: selectedRequestPath,
 				latencyMs: selectedLatencyMs,
@@ -1210,14 +1283,32 @@ proxy.all("/*", tokenAuth, async (c) => {
 			});
 		} else {
 			activeStreamUsageParsers += 1;
-			const task = parseUsageFromSse(
-				selectedResponse.clone(),
-				streamUsageOptions,
-			)
+			const task = parseUsageFromSse(selectedResponse.clone(), {
+				...streamUsageOptions,
+				timeoutMs: STREAM_USAGE_PARSE_TIMEOUT_MS,
+			})
 				.then((streamUsage) => {
 					const usageValue = selectedImmediateUsage ?? streamUsage.usage;
+					if (streamUsage.timedOut) {
+						console.warn("[usage:stream_parse_timeout]", {
+							path: selectedRequestPath,
+							timeout_ms: STREAM_USAGE_PARSE_TIMEOUT_MS,
+						});
+						finalizeUsage({
+							channelId: selectedChannel.id,
+							requestPath: selectedRequestPath,
+							latencyMs: selectedLatencyMs,
+							firstTokenLatencyMs: streamUsage.firstTokenLatencyMs,
+							usage: usageValue,
+							status: usageValue ? "ok" : "error",
+							upstreamStatus: selectedResponse.status,
+							errorCode: usageValue ? null : "usage_parse_timeout",
+							errorMessage: usageValue ? null : "usage_parse_timeout",
+						});
+						return;
+					}
 					if (!usageValue) {
-						recordAttemptUsage({
+						finalizeUsage({
 							channelId: selectedChannel.id,
 							requestPath: selectedRequestPath,
 							latencyMs: selectedLatencyMs,
@@ -1230,7 +1321,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 						});
 						return;
 					}
-					recordAttemptUsage({
+					finalizeUsage({
 						channelId: selectedChannel.id,
 						requestPath: selectedRequestPath,
 						latencyMs: selectedLatencyMs,
@@ -1241,7 +1332,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 					});
 				})
 				.catch(() => {
-					recordAttemptUsage({
+					finalizeUsage({
 						channelId: selectedChannel.id,
 						requestPath: selectedRequestPath,
 						latencyMs: selectedLatencyMs,
@@ -1249,8 +1340,8 @@ proxy.all("/*", tokenAuth, async (c) => {
 						usage: selectedImmediateUsage,
 						status: selectedImmediateUsage ? "ok" : "error",
 						upstreamStatus: selectedResponse.status,
-						errorCode: selectedImmediateUsage ? null : "usage_missing",
-						errorMessage: selectedImmediateUsage ? null : "usage_missing",
+						errorCode: selectedImmediateUsage ? null : "usage_parse_failed",
+						errorMessage: selectedImmediateUsage ? null : "usage_parse_failed",
 					});
 				})
 				.finally(() => {
@@ -1264,11 +1355,17 @@ proxy.all("/*", tokenAuth, async (c) => {
 		}
 	}
 
-	if (selectedUpstreamProvider && endpointType === "chat") {
+	if (
+		selectedUpstreamProvider &&
+		selectedUpstreamEndpoint &&
+		(endpointType === "chat" || endpointType === "responses")
+	) {
 		const transformed = await adaptChatResponse({
 			response: selectedResponse,
 			upstreamProvider: selectedUpstreamProvider,
 			downstreamProvider,
+			upstreamEndpoint: selectedUpstreamEndpoint,
+			downstreamEndpoint: endpointType,
 			model: selectedUpstreamModel ?? downstreamModel,
 			isStream,
 		});
