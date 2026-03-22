@@ -37,7 +37,12 @@ import {
 	parseDownstreamModel,
 	parseDownstreamStream,
 } from "../services/provider-transform";
-import { recordRuntimeEvent } from "../services/runtime-events";
+import {
+	buildActiveChannelsKey,
+	buildCallTokensIndexKey,
+	readHotJson,
+	writeHotJson,
+} from "../services/hot-kv";
 import { getCacheConfig, getProxyRuntimeSettings } from "../services/settings";
 import {
 	getUsageLimiterStub,
@@ -49,7 +54,6 @@ import {
 	processUsageQueueEvent,
 	type UsageQueueEvent,
 } from "../services/usage-queue";
-import { withJsonCache } from "../utils/cache";
 import { jsonError } from "../utils/http";
 import { safeJsonParse } from "../utils/json";
 import { extractReasoningEffort } from "../utils/reasoning";
@@ -97,6 +101,8 @@ const INTERNAL_USAGE_RESERVE_TIMEOUT_MS = 600;
 const INTERNAL_USAGE_QUEUE_SEND_TIMEOUT_MS = 1500;
 const INTERNAL_COOLDOWN_HTTP_STATUSES = [408, 429];
 const INTERNAL_COOLDOWN_MIN_STATUS = 500;
+const HOT_KV_ACTIVE_CHANNELS_TTL_SECONDS = 60;
+const HOT_KV_CALL_TOKENS_TTL_SECONDS = 60;
 const INTERNAL_COOLDOWN_ERROR_CODES = [
 	"timeout",
 	"exception",
@@ -283,25 +289,12 @@ function createUsageEventScheduler(
 	let reserveBreakerUntil = 0;
 	let dispatchSequence = 0;
 	const emitRuntimeEvent = (
-		level: "info" | "warning" | "error",
-		code: string,
-		message: string,
-		context: Record<string, unknown>,
+		_level: "info" | "warning" | "error",
+		_code: string,
+		_message: string,
+		_context: Record<string, unknown>,
 	) => {
-		const task = recordRuntimeEvent(c.env.DB, {
-			level,
-			code,
-			message,
-			requestPath:
-				(typeof context.requestPath === "string" && context.requestPath) ||
-				diagnostics.requestPath ||
-				null,
-			method: diagnostics.method ?? null,
-			tokenId: diagnostics.tokenId ?? null,
-			model: diagnostics.model ?? null,
-			context,
-		}).catch(() => undefined);
-		scheduleDbWrite(c, task);
+		// runtime events intentionally disabled
 	};
 
 	const trackQueueMetric = (kind: UsageQueueTrackKind): void => {
@@ -449,7 +442,10 @@ function createUsageEventScheduler(
 					trackQueueMetric("direct");
 				}
 			}
-			await processUsageQueueEvent(c.env.DB, event, c.env.CACHE_VERSION_STORE);
+			await processUsageQueueEvent(
+				c.env.DB,
+				event,
+			);
 		})().catch((error) => {
 			emitRuntimeEvent(
 				"error",
@@ -741,11 +737,12 @@ async function fetchWithTimeout(
  * Multi-provider proxy handler.
  */
 proxy.all("/*", tokenAuth, async (c) => {
+	const db = c.env.DB;
 	const tokenRecord = c.get("tokenRecord") as TokenRecord;
 	const requestStart = Date.now();
 	const [cacheConfig, runtimeSettings] = await Promise.all([
-		getCacheConfig(c.env.DB, c.env.CACHE_VERSION_STORE),
-		getProxyRuntimeSettings(c.env.DB),
+		getCacheConfig(db, c.env.CACHE_VERSION_STORE),
+		getProxyRuntimeSettings(db),
 	]);
 	let requestText = await c.req.text();
 	const parsedBody = requestText
@@ -765,24 +762,12 @@ proxy.all("/*", tokenAuth, async (c) => {
 	);
 	const reasoningEffort = extractReasoningEffort(parsedBody);
 	const scheduleRuntimeEvent = (
-		level: "info" | "warning" | "error",
-		code: string,
-		message: string,
-		context: Record<string, unknown>,
+		_level: "info" | "warning" | "error",
+		_code: string,
+		_message: string,
+		_context: Record<string, unknown>,
 	) => {
-		scheduleDbWrite(
-			c,
-			recordRuntimeEvent(c.env.DB, {
-				level,
-				code,
-				message,
-				requestPath: c.req.path,
-				method: c.req.method,
-				tokenId: tokenRecord.id,
-				model: downstreamModel,
-				context,
-			}).catch(() => undefined),
-		);
+		// runtime events intentionally disabled
 	};
 	const scheduleUsageEvent = createUsageEventScheduler(c, runtimeSettings, {
 		requestPath: c.req.path,
@@ -903,38 +888,60 @@ proxy.all("/*", tokenAuth, async (c) => {
 		});
 	};
 
-	const activeChannels = await withJsonCache<ChannelRecord[]>(
-		{
-			namespace: "channels",
-			key: "active",
-			version: cacheConfig.version_channels,
-			ttlSeconds: cacheConfig.channels_ttl_seconds,
-			enabled: cacheConfig.enabled,
-		},
-		async () => {
-			const result = await c.env.DB.prepare(
-				"SELECT * FROM channels WHERE status = ?",
-			)
-				.bind("active")
-				.all();
-			return (result.results ?? []) as ChannelRecord[];
-		},
+	const activeChannelsCacheKey = buildActiveChannelsKey(
+		cacheConfig.version_channels,
 	);
-	const channelIds = activeChannels.map((channel) => channel.id);
-	const callTokenKey = channelIds.slice().sort().join(",");
-	const callTokenRows = await withJsonCache(
-		{
-			namespace: "call_tokens",
-			key: callTokenKey,
-			version: cacheConfig.version_call_tokens,
-			ttlSeconds: cacheConfig.call_tokens_ttl_seconds,
-			enabled: cacheConfig.enabled,
-		},
-		() =>
-			listCallTokens(c.env.DB, {
-				channelIds,
-			}),
+	let activeChannelRows = await readHotJson<ChannelRecord[]>(
+		c.env.KV_HOT,
+		activeChannelsCacheKey,
 	);
+	if (!Array.isArray(activeChannelRows)) {
+		const activeChannels = await db
+			.prepare("SELECT * FROM channels WHERE status = ?")
+			.bind("active")
+			.all<ChannelRecord>();
+		activeChannelRows = (activeChannels.results ?? []) as ChannelRecord[];
+		void writeHotJson(
+			c.env.KV_HOT,
+			activeChannelsCacheKey,
+			activeChannelRows,
+			HOT_KV_ACTIVE_CHANNELS_TTL_SECONDS,
+		);
+	}
+	const channelIds = activeChannelRows.map((channel) => channel.id);
+	const callTokensCacheKey = buildCallTokensIndexKey(
+		cacheConfig.version_call_tokens,
+		cacheConfig.version_channels,
+	);
+	const cachedCallTokenRows = await readHotJson<
+		Array<{
+			id: string;
+			channel_id: string;
+			name: string;
+			api_key: string;
+			models_json?: string | null;
+		}>
+	>(c.env.KV_HOT, callTokensCacheKey);
+	let callTokenRows: Array<{
+		id: string;
+		channel_id: string;
+		name: string;
+		api_key: string;
+		models_json?: string | null;
+	}> = [];
+	if (Array.isArray(cachedCallTokenRows)) {
+		callTokenRows = cachedCallTokenRows;
+	} else {
+		callTokenRows = await listCallTokens(db, {
+			channelIds,
+		});
+		void writeHotJson(
+			c.env.KV_HOT,
+			callTokensCacheKey,
+			callTokenRows,
+			HOT_KV_CALL_TOKENS_TTL_SECONDS,
+		);
+	}
 	const callTokenMap = new Map<string, CallTokenItem[]>();
 	for (const row of callTokenRows) {
 		const entry: CallTokenItem = {
@@ -948,9 +955,9 @@ proxy.all("/*", tokenAuth, async (c) => {
 		list.push(entry);
 		callTokenMap.set(row.channel_id, list);
 	}
-	const allowedChannels = filterAllowedChannels(activeChannels, tokenRecord);
+	const allowedChannels = filterAllowedChannels(activeChannelRows, tokenRecord);
 	const verifiedModelsByChannel = await listVerifiedModelsByChannel(
-		c.env.DB,
+		db,
 		allowedChannels.map((channel) => channel.id),
 	);
 	let candidates = selectCandidateChannels(
@@ -977,7 +984,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 	);
 	if (downstreamModel && cooldownSeconds > 0 && candidates.length > 0) {
 		const coolingChannels = await listCoolingDownChannelsForModel(
-			c.env.DB,
+			db,
 			candidates.map((channel) => channel.id),
 			downstreamModel,
 			cooldownSeconds,

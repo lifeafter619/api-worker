@@ -19,6 +19,11 @@ binding = "DB"
 database_name = "api-worker"
 database_id = "00000000-0000-0000-0000-000000000000"
 
+[[kv_namespaces]]
+binding = "KV_HOT"
+# Replaced by CI during deployment
+id = "00000000000000000000000000000000"
+
 [assets]
 directory = "../ui/dist"
 binding = "ASSETS"

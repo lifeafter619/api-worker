@@ -3,7 +3,6 @@ import type {
 	DurableObjectNamespace,
 } from "@cloudflare/workers-types";
 import type { Bindings } from "../env";
-import { withJsonCache } from "../utils/cache";
 import { nowIso } from "../utils/time";
 import {
 	ALL_CACHE_VERSION_SCOPES,
@@ -15,7 +14,6 @@ import {
 	normalizeRuntimeEventLevels,
 	RUNTIME_EVENT_LEVEL_VALUES,
 	type RuntimeEventLevel,
-	recordRuntimeEvent,
 	resetRuntimeEventLevelSnapshot,
 } from "./runtime-events";
 
@@ -349,20 +347,8 @@ export async function bumpCacheVersions(
 	if (cacheVersionStore) {
 		try {
 			await bumpCacheVersionsInStore(cacheVersionStore, mergedScopes);
-		} catch (error) {
-			try {
-				await recordRuntimeEvent(db, {
-					level: "warning",
-					code: "cache_version_store_bump_failed",
-					message: "cache_version_store_bump_failed",
-					context: {
-						error: error instanceof Error ? error.message : String(error),
-						scopes: mergedScopes,
-					},
-				});
-			} catch {
-				// ignore runtime logging failures
-			}
+		} catch {
+			// ignore cache-version DO failures and fall back to D1 settings values
 		}
 	}
 	clearCacheConfigSnapshot();
@@ -401,17 +387,7 @@ async function getSettingsCacheControl(
 export async function getSettingsSnapshot(
 	db: D1Database,
 ): Promise<Record<string, string>> {
-	const control = await getSettingsCacheControl(db);
-	return withJsonCache(
-		{
-			namespace: "settings",
-			key: "all",
-			version: control.version,
-			ttlSeconds: control.ttlSeconds,
-			enabled: control.enabled,
-		},
-		() => listSettings(db),
-	);
+	return listSettings(db);
 }
 
 export async function getProxyRuntimeSettings(
@@ -718,19 +694,8 @@ export async function getCacheConfig(
 				[...ALL_CACHE_VERSION_SCOPES],
 				fallbackVersions,
 			);
-		} catch (error) {
-			try {
-				await recordRuntimeEvent(db, {
-					level: "warning",
-					code: "cache_version_store_read_failed",
-					message: "cache_version_store_read_failed",
-					context: {
-						error: error instanceof Error ? error.message : String(error),
-					},
-				});
-			} catch {
-				// ignore runtime logging failures
-			}
+		} catch {
+			// ignore cache-version DO failures and fall back to D1 settings values
 		}
 	}
 	const value = {

@@ -10,12 +10,10 @@ import newapiChannelRoutes from "./routes/newapiChannels";
 import newapiGroupRoutes from "./routes/newapiGroups";
 import newapiUserRoutes from "./routes/newapiUsers";
 import proxyRoutes from "./routes/proxy";
-import runtimeEventRoutes from "./routes/runtime-events";
 import settingsRoutes from "./routes/settings";
 import siteRoutes from "./routes/sites";
 import tokenRoutes from "./routes/tokens";
 import usageRoutes from "./routes/usage";
-import { recordRuntimeEvent } from "./services/runtime-events";
 import { handleUsageQueue } from "./services/usage-queue";
 import { warmupWasmCore } from "./wasm/core";
 
@@ -79,7 +77,6 @@ app.route("/api/tokens", tokenRoutes);
 app.route("/api/usage", usageRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/settings", settingsRoutes);
-app.route("/api/runtime-events", runtimeEventRoutes);
 app.route("/api/channel", newapiChannelRoutes);
 app.route("/api/user", newapiUserRoutes);
 app.route("/api/group", newapiGroupRoutes);
@@ -87,22 +84,7 @@ app.route("/api/group", newapiGroupRoutes);
 app.route("/v1", proxyRoutes);
 app.route("/v1beta", proxyRoutes);
 
-app.onError(async (err, c) => {
-	try {
-		await recordRuntimeEvent(c.env.DB, {
-			level: "error",
-			code: "app_unhandled_error",
-			message: err.message || "app_unhandled_error",
-			requestPath: c.req.path,
-			method: c.req.method,
-			context: {
-				stack: err.stack ?? null,
-			},
-		});
-	} catch {
-		// ignore runtime logging failures
-	}
-
+app.onError((_, c) => {
 	if (
 		c.req.path === "/api" ||
 		c.req.path.startsWith("/api/") ||

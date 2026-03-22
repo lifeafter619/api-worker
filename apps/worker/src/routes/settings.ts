@@ -1,87 +1,80 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
+import { getCheckinSchedulerStub, shouldResetLastRun } from "../services/checkin-scheduler";
 import {
-	ALL_CACHE_VERSION_SCOPES,
-	type CacheVersionScope,
-} from "../services/cache-version-store";
-import {
-	getCheckinSchedulerStub,
-	shouldResetLastRun,
-} from "../services/checkin-scheduler";
-import {
-	RUNTIME_EVENT_LEVEL_VALUES,
-	recordRuntimeEvent,
-} from "../services/runtime-events";
-import {
-	bumpCacheVersions,
-	getCacheConfig,
 	getCheckinScheduleTime,
 	getProxyRuntimeSettings,
 	getRetentionDays,
-	getRuntimeEventContextMaxLength,
-	getRuntimeEventLevels,
-	getRuntimeEventRetentionDays,
 	getRuntimeProxyConfig,
 	getSessionTtlHours,
 	isAdminPasswordSet,
 	setAdminPasswordHash,
-	setCacheConfig,
 	setCheckinScheduleTime,
 	setProxyRuntimeSettings,
 	setRetentionDays,
-	setRuntimeEventContextMaxLength,
-	setRuntimeEventLevels,
-	setRuntimeEventRetentionDays,
 	setSessionTtlHours,
 } from "../services/settings";
-import {
-	getUsageLimiterStub,
-	getUsageQueueStatus,
-} from "../services/usage-limiter";
+import { getUsageLimiterStub, getUsageQueueStatus } from "../services/usage-limiter";
 import { sha256Hex } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 
 const settings = new Hono<AppEnv>();
 
+type UsageQueueStatusView = {
+	count: number | null;
+	date: string | null;
+	limit: number;
+	enabled: boolean;
+	bound: boolean;
+	active: boolean;
+	reserved_count: number | null;
+	enqueue_success_count: number | null;
+	direct_count: number | null;
+	fallback_direct_count: number | null;
+	reserve_failed_count: number | null;
+	reserve_over_limit_count: number | null;
+	queue_send_failed_count: number | null;
+	target_queue_ratio: number;
+	target_direct_ratio: number;
+	effective_queue_ratio: number | null;
+	effective_direct_ratio: number | null;
+	effective_total_count: number | null;
+};
+
 /**
  * Returns settings values.
  */
 settings.get("/", async (c) => {
-	const retention = await getRetentionDays(c.env.DB);
-	const sessionTtlHours = await getSessionTtlHours(c.env.DB);
-	const adminPasswordSet = await isAdminPasswordSet(c.env.DB);
-	const checkinScheduleTime = await getCheckinScheduleTime(c.env.DB);
-
-	const runtimeEventRetentionDays = await getRuntimeEventRetentionDays(
-		c.env.DB,
-	);
-	const runtimeEventLevels = await getRuntimeEventLevels(c.env.DB);
-	const runtimeEventContextMaxLength = await getRuntimeEventContextMaxLength(
-		c.env.DB,
-	);
-	const runtimeSettings = await getProxyRuntimeSettings(c.env.DB);
+	const db = c.env.DB;
+	const retention = await getRetentionDays(db);
+	const sessionTtlHours = await getSessionTtlHours(db);
+	const adminPasswordSet = await isAdminPasswordSet(db);
+	const checkinScheduleTime = await getCheckinScheduleTime(db);
+	const runtimeSettings = await getProxyRuntimeSettings(db);
 	const runtimeConfig = getRuntimeProxyConfig(c.env, runtimeSettings);
-	const cacheConfig = await getCacheConfig(c.env.DB, c.env.CACHE_VERSION_STORE);
-	let usageQueueStatus: {
-		count: number | null;
-		date: string | null;
-		limit: number;
-		enabled: boolean;
-		bound: boolean;
-		active: boolean;
-		reserved_count: number | null;
-		enqueue_success_count: number | null;
-		direct_count: number | null;
-		fallback_direct_count: number | null;
-		reserve_failed_count: number | null;
-		reserve_over_limit_count: number | null;
-		queue_send_failed_count: number | null;
-		target_queue_ratio: number;
-		target_direct_ratio: number;
-		effective_queue_ratio: number | null;
-		effective_direct_ratio: number | null;
-		effective_total_count: number | null;
-	} | null = null;
+
+	const emptyUsageQueueStatus: UsageQueueStatusView = {
+		count: null,
+		date: null,
+		limit: runtimeSettings.usage_queue_daily_limit,
+		enabled: runtimeSettings.usage_queue_enabled,
+		bound: runtimeConfig.usage_queue_bound,
+		active: runtimeConfig.usage_queue_active,
+		reserved_count: null,
+		enqueue_success_count: null,
+		direct_count: null,
+		fallback_direct_count: null,
+		reserve_failed_count: null,
+		reserve_over_limit_count: null,
+		queue_send_failed_count: null,
+		target_queue_ratio: 1 - runtimeSettings.usage_queue_direct_write_ratio,
+		target_direct_ratio: runtimeSettings.usage_queue_direct_write_ratio,
+		effective_queue_ratio: null,
+		effective_direct_ratio: null,
+		effective_total_count: null,
+	};
+
+	let usageQueueStatus: UsageQueueStatusView = emptyUsageQueueStatus;
 	if (c.env.USAGE_LIMITER) {
 		try {
 			const status = await getUsageQueueStatus(
@@ -89,9 +82,7 @@ settings.get("/", async (c) => {
 			);
 			const effectiveTotal = status.enqueue_success_count + status.direct_count;
 			const effectiveQueueRatio =
-				effectiveTotal > 0
-					? status.enqueue_success_count / effectiveTotal
-					: null;
+				effectiveTotal > 0 ? status.enqueue_success_count / effectiveTotal : null;
 			const effectiveDirectRatio =
 				effectiveTotal > 0 ? status.direct_count / effectiveTotal : null;
 			usageQueueStatus = {
@@ -114,40 +105,11 @@ settings.get("/", async (c) => {
 				effective_direct_ratio: effectiveDirectRatio,
 				effective_total_count: effectiveTotal,
 			};
-		} catch (error) {
-			await recordRuntimeEvent(c.env.DB, {
-				level: "warning",
-				code: "settings_usage_queue_status_failed",
-				message: "settings_usage_queue_status_failed",
-				requestPath: c.req.path,
-				method: c.req.method,
-				context: {
-					error: error instanceof Error ? error.message : String(error),
-				},
-			}).catch(() => undefined);
+		} catch {
+			usageQueueStatus = emptyUsageQueueStatus;
 		}
-	} else {
-		usageQueueStatus = {
-			count: null,
-			date: null,
-			limit: runtimeSettings.usage_queue_daily_limit,
-			enabled: runtimeSettings.usage_queue_enabled,
-			bound: runtimeConfig.usage_queue_bound,
-			active: runtimeConfig.usage_queue_active,
-			reserved_count: null,
-			enqueue_success_count: null,
-			direct_count: null,
-			fallback_direct_count: null,
-			reserve_failed_count: null,
-			reserve_over_limit_count: null,
-			queue_send_failed_count: null,
-			target_queue_ratio: 1 - runtimeSettings.usage_queue_direct_write_ratio,
-			target_direct_ratio: runtimeSettings.usage_queue_direct_write_ratio,
-			effective_queue_ratio: null,
-			effective_direct_ratio: null,
-			effective_total_count: null,
-		};
 	}
+
 	return c.json({
 		log_retention_days: retention,
 		session_ttl_hours: sessionTtlHours,
@@ -157,12 +119,8 @@ settings.get("/", async (c) => {
 			runtimeSettings.model_failure_cooldown_minutes,
 		proxy_model_failure_cooldown_threshold:
 			runtimeSettings.model_failure_cooldown_threshold,
-		runtime_event_retention_days: runtimeEventRetentionDays,
-		runtime_event_levels: runtimeEventLevels,
-		runtime_event_context_max_length: runtimeEventContextMaxLength,
 		runtime_config: runtimeConfig,
 		runtime_settings: runtimeSettings,
-		cache_config: cacheConfig,
 		usage_queue_status: usageQueueStatus,
 	});
 });
@@ -171,24 +129,17 @@ settings.get("/", async (c) => {
  * Updates settings values.
  */
 settings.put("/", async (c) => {
+	const db = c.env.DB;
 	const body = await c.req.json().catch(() => null);
 	if (!body) {
 		return jsonError(c, 400, "settings_required", "settings_required");
 	}
 
 	let touched = false;
-	let cacheTouched = false;
 	let runtimeTouched = false;
-	const cachePatch: {
-		enabled?: boolean;
-		dashboardTtlSeconds?: number;
-		usageTtlSeconds?: number;
-		modelsTtlSeconds?: number;
-		tokensTtlSeconds?: number;
-		channelsTtlSeconds?: number;
-		callTokensTtlSeconds?: number;
-		settingsTtlSeconds?: number;
-	} = {};
+	let scheduleTouched = false;
+	let scheduleReset = false;
+
 	const runtimePatch: {
 		upstream_timeout_ms?: number;
 		retry_max_retries?: number;
@@ -204,8 +155,6 @@ settings.put("/", async (c) => {
 		usage_queue_daily_limit?: number;
 		usage_queue_direct_write_ratio?: number;
 	} = {};
-	let scheduleTouched = false;
-	let scheduleReset = false;
 
 	if (body.log_retention_days !== undefined) {
 		const days = Number(body.log_retention_days);
@@ -217,7 +166,7 @@ settings.put("/", async (c) => {
 				"invalid_log_retention_days",
 			);
 		}
-		await setRetentionDays(c.env.DB, days);
+		await setRetentionDays(db, days);
 		touched = true;
 	}
 
@@ -231,196 +180,8 @@ settings.put("/", async (c) => {
 				"invalid_session_ttl_hours",
 			);
 		}
-		await setSessionTtlHours(c.env.DB, hours);
+		await setSessionTtlHours(db, hours);
 		touched = true;
-	}
-
-	if (body.runtime_event_retention_days !== undefined) {
-		const days = Number(body.runtime_event_retention_days);
-		if (Number.isNaN(days) || days < 1) {
-			return jsonError(
-				c,
-				400,
-				"invalid_runtime_event_retention_days",
-				"invalid_runtime_event_retention_days",
-			);
-		}
-		await setRuntimeEventRetentionDays(c.env.DB, days);
-		touched = true;
-	}
-
-	if (body.runtime_event_context_max_length !== undefined) {
-		const maxLength = Number(body.runtime_event_context_max_length);
-		if (Number.isNaN(maxLength) || maxLength < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_runtime_event_context_max_length",
-				"invalid_runtime_event_context_max_length",
-			);
-		}
-		await setRuntimeEventContextMaxLength(c.env.DB, maxLength);
-		touched = true;
-	}
-
-	if (body.runtime_event_levels !== undefined) {
-		let levelsRaw: string[] | null = null;
-		if (Array.isArray(body.runtime_event_levels)) {
-			levelsRaw = body.runtime_event_levels.map((item: unknown) =>
-				String(item),
-			);
-		} else if (typeof body.runtime_event_levels === "string") {
-			levelsRaw = body.runtime_event_levels.split(",");
-		} else if (body.runtime_event_levels === null) {
-			levelsRaw = [];
-		}
-		if (!levelsRaw) {
-			return jsonError(
-				c,
-				400,
-				"invalid_runtime_event_levels",
-				"invalid_runtime_event_levels",
-			);
-		}
-		const allowedLevels = new Set<string>(RUNTIME_EVENT_LEVEL_VALUES);
-		const normalizedLevels = levelsRaw
-			.map((item) => item.trim().toLowerCase())
-			.filter(Boolean);
-		if (normalizedLevels.some((level) => !allowedLevels.has(level))) {
-			return jsonError(
-				c,
-				400,
-				"invalid_runtime_event_levels",
-				"invalid_runtime_event_levels",
-			);
-		}
-		await setRuntimeEventLevels(c.env.DB, normalizedLevels);
-		touched = true;
-	}
-
-	if (body.cache_enabled !== undefined) {
-		const raw = body.cache_enabled;
-		let enabled: boolean | null = null;
-		if (typeof raw === "boolean") {
-			enabled = raw;
-		} else if (typeof raw === "number") {
-			enabled = raw !== 0;
-		} else if (typeof raw === "string") {
-			const normalized = raw.trim().toLowerCase();
-			if (["1", "true", "yes", "on"].includes(normalized)) {
-				enabled = true;
-			} else if (["0", "false", "no", "off"].includes(normalized)) {
-				enabled = false;
-			}
-		}
-		if (enabled === null) {
-			return jsonError(
-				c,
-				400,
-				"invalid_cache_enabled",
-				"invalid_cache_enabled",
-			);
-		}
-		cachePatch.enabled = enabled;
-		cacheTouched = true;
-	}
-
-	if (body.cache_ttl_dashboard_seconds !== undefined) {
-		const ttl = Number(body.cache_ttl_dashboard_seconds);
-		if (Number.isNaN(ttl) || ttl < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_cache_ttl_dashboard_seconds",
-				"invalid_cache_ttl_dashboard_seconds",
-			);
-		}
-		cachePatch.dashboardTtlSeconds = Math.floor(ttl);
-		cacheTouched = true;
-	}
-
-	if (body.cache_ttl_usage_seconds !== undefined) {
-		const ttl = Number(body.cache_ttl_usage_seconds);
-		if (Number.isNaN(ttl) || ttl < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_cache_ttl_usage_seconds",
-				"invalid_cache_ttl_usage_seconds",
-			);
-		}
-		cachePatch.usageTtlSeconds = Math.floor(ttl);
-		cacheTouched = true;
-	}
-
-	if (body.cache_ttl_models_seconds !== undefined) {
-		const ttl = Number(body.cache_ttl_models_seconds);
-		if (Number.isNaN(ttl) || ttl < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_cache_ttl_models_seconds",
-				"invalid_cache_ttl_models_seconds",
-			);
-		}
-		cachePatch.modelsTtlSeconds = Math.floor(ttl);
-		cacheTouched = true;
-	}
-
-	if (body.cache_ttl_tokens_seconds !== undefined) {
-		const ttl = Number(body.cache_ttl_tokens_seconds);
-		if (Number.isNaN(ttl) || ttl < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_cache_ttl_tokens_seconds",
-				"invalid_cache_ttl_tokens_seconds",
-			);
-		}
-		cachePatch.tokensTtlSeconds = Math.floor(ttl);
-		cacheTouched = true;
-	}
-
-	if (body.cache_ttl_channels_seconds !== undefined) {
-		const ttl = Number(body.cache_ttl_channels_seconds);
-		if (Number.isNaN(ttl) || ttl < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_cache_ttl_channels_seconds",
-				"invalid_cache_ttl_channels_seconds",
-			);
-		}
-		cachePatch.channelsTtlSeconds = Math.floor(ttl);
-		cacheTouched = true;
-	}
-
-	if (body.cache_ttl_call_tokens_seconds !== undefined) {
-		const ttl = Number(body.cache_ttl_call_tokens_seconds);
-		if (Number.isNaN(ttl) || ttl < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_cache_ttl_call_tokens_seconds",
-				"invalid_cache_ttl_call_tokens_seconds",
-			);
-		}
-		cachePatch.callTokensTtlSeconds = Math.floor(ttl);
-		cacheTouched = true;
-	}
-
-	if (body.cache_ttl_settings_seconds !== undefined) {
-		const ttl = Number(body.cache_ttl_settings_seconds);
-		if (Number.isNaN(ttl) || ttl < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_cache_ttl_settings_seconds",
-				"invalid_cache_ttl_settings_seconds",
-			);
-		}
-		cachePatch.settingsTtlSeconds = Math.floor(ttl);
-		cacheTouched = true;
 	}
 
 	if (body.proxy_upstream_timeout_ms !== undefined) {
@@ -471,11 +232,7 @@ settings.put("/", async (c) => {
 
 	if (body.proxy_model_failure_cooldown_threshold !== undefined) {
 		const threshold = Number(body.proxy_model_failure_cooldown_threshold);
-		if (
-			Number.isNaN(threshold) ||
-			threshold < 1 ||
-			!Number.isInteger(threshold)
-		) {
+		if (Number.isNaN(threshold) || threshold < 1 || !Number.isInteger(threshold)) {
 			return jsonError(
 				c,
 				400,
@@ -628,12 +385,12 @@ settings.put("/", async (c) => {
 
 	if (typeof body.admin_password === "string" && body.admin_password.trim()) {
 		const hash = await sha256Hex(body.admin_password.trim());
-		await setAdminPasswordHash(c.env.DB, hash);
+		await setAdminPasswordHash(db, hash);
 		touched = true;
 	}
 
 	if (body.checkin_schedule_time !== undefined) {
-		const currentTime = await getCheckinScheduleTime(c.env.DB);
+		const currentTime = await getCheckinScheduleTime(db);
 		const timeValue = String(body.checkin_schedule_time).trim();
 		if (!/^\d{2}:\d{2}$/.test(timeValue)) {
 			return jsonError(
@@ -659,23 +416,14 @@ settings.put("/", async (c) => {
 				"invalid_checkin_schedule_time",
 			);
 		}
-		await setCheckinScheduleTime(c.env.DB, timeValue);
+		await setCheckinScheduleTime(db, timeValue);
 		touched = true;
 		scheduleTouched = true;
 		scheduleReset = shouldResetLastRun(currentTime, timeValue);
 	}
 
-	if (cacheTouched) {
-		await setCacheConfig(c.env.DB, cachePatch, c.env.CACHE_VERSION_STORE);
-		touched = true;
-	}
-
 	if (runtimeTouched) {
-		await setProxyRuntimeSettings(
-			c.env.DB,
-			runtimePatch,
-			c.env.CACHE_VERSION_STORE,
-		);
+		await setProxyRuntimeSettings(db, runtimePatch, c.env.CACHE_VERSION_STORE);
 		touched = true;
 	}
 
@@ -692,35 +440,6 @@ settings.put("/", async (c) => {
 	}
 
 	return c.json({ ok: true });
-});
-
-settings.post("/cache/refresh", async (c) => {
-	await bumpCacheVersions(
-		c.env.DB,
-		[
-			"dashboard",
-			"usage",
-			"models",
-			"tokens",
-			"channels",
-			"call_tokens",
-			"settings",
-		],
-		c.env.CACHE_VERSION_STORE,
-	);
-	return c.json({ ok: true });
-});
-
-settings.post("/cache/refresh/:scope", async (c) => {
-	const scopeRaw = String(c.req.param("scope") ?? "")
-		.trim()
-		.toLowerCase();
-	if (!ALL_CACHE_VERSION_SCOPES.includes(scopeRaw as CacheVersionScope)) {
-		return jsonError(c, 400, "invalid_cache_scope", "invalid_cache_scope");
-	}
-	const scope = scopeRaw as CacheVersionScope;
-	await bumpCacheVersions(c.env.DB, [scope], c.env.CACHE_VERSION_STORE);
-	return c.json({ ok: true, scope });
 });
 
 export default settings;

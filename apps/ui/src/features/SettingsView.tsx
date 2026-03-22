@@ -1,6 +1,5 @@
 import { Button, Card, Input, Switch } from "../components/ui";
 import type {
-	CacheConfig,
 	RuntimeProxyConfig,
 	SettingsForm,
 	UsageQueueStatus,
@@ -10,36 +9,16 @@ type SettingsViewProps = {
 	settingsForm: SettingsForm;
 	adminPasswordSet: boolean;
 	isSaving: boolean;
-	cacheConfig?: CacheConfig | null;
-	isRefreshingCache?: boolean;
-	isRefreshingCacheScope?: (scope: CacheRefreshScope) => boolean;
 	runtimeConfig?: RuntimeProxyConfig | null;
 	usageQueueStatus?: UsageQueueStatus | null;
 	onSubmit: (event: Event) => void;
 	onFormChange: (patch: Partial<SettingsForm>) => void;
-	onRefreshCache: () => void;
-	onRefreshCacheScope?: (scope: CacheRefreshScope) => void;
 };
-
-type CacheRefreshScope =
-	| "dashboard"
-	| "usage"
-	| "models"
-	| "tokens"
-	| "channels"
-	| "call_tokens"
-	| "settings";
 
 const streamUsageModes = [
 	{ value: "full", label: "完整", hint: "全量解析" },
 	{ value: "lite", label: "轻量", hint: "降低开销" },
 	{ value: "off", label: "关闭", hint: "仅记录基础" },
-] as const;
-
-const runtimeEventLevelOptions = [
-	{ value: "info", label: "Info" },
-	{ value: "warning", label: "Warning" },
-	{ value: "error", label: "Error" },
 ] as const;
 
 /**
@@ -55,15 +34,10 @@ export const SettingsView = ({
 	settingsForm,
 	adminPasswordSet,
 	isSaving,
-	cacheConfig,
-	isRefreshingCache,
-	isRefreshingCacheScope,
 	runtimeConfig,
 	usageQueueStatus,
 	onSubmit,
 	onFormChange,
-	onRefreshCache,
-	onRefreshCacheScope,
 }: SettingsViewProps) => {
 	const queueBoundValue =
 		runtimeConfig === null || runtimeConfig === undefined
@@ -115,65 +89,6 @@ export const SettingsView = ({
 				usageQueueStatus.target_direct_ratio,
 			)}`
 		: "-";
-
-	const cacheItems = [
-		{
-			key: "cache_ttl_dashboard_seconds",
-			id: "cache-dashboard-ttl",
-			title: "面板缓存",
-			hint: "0 表示关闭该接口缓存。",
-			version: cacheConfig?.version_dashboard ?? "-",
-			scope: "dashboard" as const,
-		},
-		{
-			key: "cache_ttl_usage_seconds",
-			id: "cache-usage-ttl",
-			title: "日志缓存",
-			hint: "日志查询建议设置较短 TTL。",
-			version: cacheConfig?.version_usage ?? "-",
-			scope: "usage" as const,
-		},
-		{
-			key: "cache_ttl_models_seconds",
-			id: "cache-models-ttl",
-			title: "模型缓存",
-			hint: "",
-			version: cacheConfig?.version_models ?? "-",
-			scope: "models" as const,
-		},
-		{
-			key: "cache_ttl_tokens_seconds",
-			id: "cache-tokens-ttl",
-			title: "Token 鉴权缓存",
-			hint: "禁用令牌会自动失效，不影响即时生效。",
-			version: cacheConfig?.version_tokens ?? "-",
-			scope: "tokens" as const,
-		},
-		{
-			key: "cache_ttl_channels_seconds",
-			id: "cache-channels-ttl",
-			title: "渠道缓存",
-			hint: "",
-			version: cacheConfig?.version_channels ?? "-",
-			scope: "channels" as const,
-		},
-		{
-			key: "cache_ttl_call_tokens_seconds",
-			id: "cache-call-tokens-ttl",
-			title: "调用令牌缓存",
-			hint: "",
-			version: cacheConfig?.version_call_tokens ?? "-",
-			scope: "call_tokens" as const,
-		},
-		{
-			key: "cache_ttl_settings_seconds",
-			id: "cache-settings-ttl",
-			title: "设置缓存",
-			hint: "",
-			version: cacheConfig?.version_settings ?? "-",
-			scope: "settings" as const,
-		},
-	] as const;
 
 	return (
 		<div class="animate-fade-up space-y-4">
@@ -696,189 +611,7 @@ export const SettingsView = ({
 					</div>
 				</Card>
 
-				<Card class="app-settings-group">
-					<div class="app-settings-group__header">
-						<h4 class="app-settings-group__title">系统日志</h4>
-						<p class="app-settings-group__caption">写入等级与存储策略</p>
-					</div>
-					<div class="app-settings-list">
-						<div class="app-settings-row">
-							<div class="app-settings-row__main">
-								<label
-									class="app-settings-row__label"
-									for="runtime-event-retention"
-								>
-									系统日志保留天数
-								</label>
-								<p class="app-settings-row__hint">
-									用于系统日志模块，按天自动清理。
-								</p>
-							</div>
-							<Input
-								class="app-settings-row__control app-settings-row__control--compact"
-								id="runtime-event-retention"
-								name="runtime_event_retention_days"
-								type="number"
-								min="1"
-								value={settingsForm.runtime_event_retention_days}
-								onInput={(event) => {
-									const target = event.currentTarget as HTMLInputElement | null;
-									onFormChange({
-										runtime_event_retention_days: target?.value ?? "",
-									});
-								}}
-							/>
-						</div>
-						<div class="app-settings-row app-settings-row--stack">
-							<div class="app-settings-row__main">
-								<span class="app-settings-row__label">系统日志写入等级</span>
-								<p class="app-settings-row__hint">
-									可不选；不选表示完全关闭系统日志写入。
-								</p>
-							</div>
-							<div class="app-segment app-settings-row__control app-settings-row__control--full">
-								{runtimeEventLevelOptions.map((option) => {
-									const active = settingsForm.runtime_event_levels.includes(
-										option.value,
-									);
-									return (
-										<button
-											aria-pressed={active}
-											class={`app-segment__button ${
-												active ? "app-segment__button--active" : ""
-											}`}
-											key={option.value}
-											type="button"
-											onClick={() => {
-												const next = active
-													? settingsForm.runtime_event_levels.filter(
-															(level) => level !== option.value,
-														)
-													: [
-															...settingsForm.runtime_event_levels,
-															option.value,
-														];
-												onFormChange({ runtime_event_levels: next });
-											}}
-										>
-											<span>{option.label}</span>
-										</button>
-									);
-								})}
-							</div>
-						</div>
-						<div class="app-settings-row">
-							<div class="app-settings-row__main">
-								<label
-									class="app-settings-row__label"
-									for="runtime-event-context-max-length"
-								>
-									系统日志上下文最大长度
-								</label>
-								<p class="app-settings-row__hint">
-									context_json 写入前截断长度，0 表示不截断。
-								</p>
-							</div>
-							<Input
-								class="app-settings-row__control app-settings-row__control--compact"
-								id="runtime-event-context-max-length"
-								name="runtime_event_context_max_length"
-								type="number"
-								min="0"
-								step="1"
-								value={settingsForm.runtime_event_context_max_length}
-								onInput={(event) => {
-									const target = event.currentTarget as HTMLInputElement | null;
-									onFormChange({
-										runtime_event_context_max_length: target?.value ?? "",
-									});
-								}}
-							/>
-						</div>
-					</div>
-				</Card>
-
-				<Card class="app-settings-group">
-					<div class="app-settings-group__header">
-						<h4 class="app-settings-group__title">缓存</h4>
-						<p class="app-settings-group__caption">控制各接口缓存策略与版本</p>
-					</div>
-					<div class="app-settings-list">
-						<div class="app-settings-row">
-							<div class="app-settings-row__main">
-								<span class="app-settings-row__label">启用缓存（总开关）</span>
-								<p class="app-settings-row__hint">
-									影响面板、日志、模型、鉴权、渠道、调用令牌与设置缓存。
-								</p>
-							</div>
-							<div class="app-settings-row__switch">
-								<Switch
-									checked={settingsForm.cache_enabled}
-									onToggle={(next) => {
-										onFormChange({ cache_enabled: next });
-									}}
-								/>
-							</div>
-						</div>
-					</div>
-					<div class="app-settings-cache-grid">
-						{cacheItems.map((item) => {
-							const refreshing = isRefreshingCacheScope?.(item.scope) ?? false;
-							return (
-								<div class="app-settings-cache-card" key={item.id}>
-									<div class="app-settings-cache-card__title">{item.title}</div>
-									<label class="app-settings-cache-card__label" for={item.id}>
-										TTL（秒）
-									</label>
-									<Input
-										id={item.id}
-										name={item.key}
-										type="number"
-										min="0"
-										value={settingsForm[item.key]}
-										onInput={(event) => {
-											const target =
-												event.currentTarget as HTMLInputElement | null;
-											onFormChange({
-												[item.key]: target?.value ?? "",
-											} as Partial<SettingsForm>);
-										}}
-									/>
-									{item.hint ? (
-										<p class="app-settings-cache-card__hint">{item.hint}</p>
-									) : (
-										<div class="h-[18px]" />
-									)}
-									<div class="app-settings-cache-card__actions">
-										<div class="app-settings-cache-card__version">
-											版本：{item.version}
-										</div>
-										<Button
-											variant="ghost"
-											size="sm"
-											type="button"
-											disabled={refreshing}
-											onClick={() => onRefreshCacheScope?.(item.scope)}
-										>
-											{refreshing ? "刷新中..." : "刷新此项"}
-										</Button>
-									</div>
-								</div>
-							);
-						})}
-					</div>
-				</Card>
-
 				<div class="app-settings-footer">
-					<Button
-						variant="ghost"
-						size="sm"
-						type="button"
-						disabled={isRefreshingCache}
-						onClick={onRefreshCache}
-					>
-						{isRefreshingCache ? "刷新中..." : "刷新全部缓存"}
-					</Button>
 					<Button variant="primary" size="lg" type="submit" disabled={isSaving}>
 						{isSaving ? "保存中..." : "保存设置"}
 					</Button>

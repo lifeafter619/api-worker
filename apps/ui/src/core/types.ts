@@ -84,35 +84,6 @@ export type UsageResponse = {
 	offset: number;
 };
 
-export type RuntimeEvent = {
-	id: string;
-	level: "info" | "warning" | "error";
-	code: string;
-	message: string;
-	request_path?: string | null;
-	method?: string | null;
-	channel_id?: string | null;
-	token_id?: string | null;
-	model?: string | null;
-	context_json?: string | null;
-	created_at: string;
-};
-
-export type RuntimeEventQuery = {
-	levels: string[];
-	codes: string[];
-	path: string;
-	from: string;
-	to: string;
-};
-
-export type RuntimeEventResponse = {
-	events: RuntimeEvent[];
-	total: number;
-	limit: number;
-	offset: number;
-};
-
 export type DashboardData = {
 	summary: {
 		total_requests: number;
@@ -147,8 +118,6 @@ export type DashboardQuery = {
 
 export type Settings = {
 	log_retention_days: number;
-	runtime_event_retention_days?: number;
-	runtime_event_levels?: string[];
 	session_ttl_hours: number;
 	admin_password_set?: boolean;
 	checkin_schedule_time?: string;
@@ -156,9 +125,7 @@ export type Settings = {
 	proxy_model_failure_cooldown_threshold?: number;
 	runtime_settings?: RuntimeProxySettings;
 	runtime_config?: RuntimeProxyConfig;
-	cache_config?: CacheConfig;
 	usage_queue_status?: UsageQueueStatus | null;
-	runtime_event_context_max_length?: number;
 };
 
 export type RuntimeProxySettings = {
@@ -180,24 +147,6 @@ export type RuntimeProxySettings = {
 export type RuntimeProxyConfig = RuntimeProxySettings & {
 	usage_queue_bound: boolean;
 	usage_queue_active: boolean;
-};
-
-export type CacheConfig = {
-	enabled: boolean;
-	dashboard_ttl_seconds: number;
-	usage_ttl_seconds: number;
-	models_ttl_seconds: number;
-	tokens_ttl_seconds: number;
-	channels_ttl_seconds: number;
-	call_tokens_ttl_seconds: number;
-	settings_ttl_seconds: number;
-	version_dashboard: number;
-	version_usage: number;
-	version_models: number;
-	version_tokens: number;
-	version_channels: number;
-	version_call_tokens: number;
-	version_settings: number;
 };
 
 export type UsageQueueStatus = {
@@ -236,7 +185,6 @@ export type AdminData = {
 	tokens: Token[];
 	models: ModelItem[];
 	usage: UsageLog[];
-	runtime_events: RuntimeEvent[];
 	dashboard: DashboardData | null;
 	settings: Settings | null;
 };
@@ -247,7 +195,6 @@ export type TabId =
 	| "models"
 	| "tokens"
 	| "usage"
-	| "runtime_events"
 	| "settings";
 
 export type TabItem = {
@@ -276,14 +223,11 @@ export type SiteCallTokenForm = {
 
 export type SettingsForm = {
 	log_retention_days: string;
-	runtime_event_retention_days: string;
-	runtime_event_levels: string[];
 	session_ttl_hours: string;
 	admin_password: string;
 	checkin_schedule_time: string;
 	proxy_model_failure_cooldown_minutes: string;
 	proxy_model_failure_cooldown_threshold: string;
-	runtime_event_context_max_length: string;
 	proxy_upstream_timeout_ms: string;
 	proxy_retry_max_retries: string;
 	proxy_stream_usage_mode: string;
@@ -295,14 +239,6 @@ export type SettingsForm = {
 	proxy_usage_queue_enabled: boolean;
 	usage_queue_daily_limit: string;
 	usage_queue_direct_write_ratio: string;
-	cache_enabled: boolean;
-	cache_ttl_dashboard_seconds: string;
-	cache_ttl_usage_seconds: string;
-	cache_ttl_models_seconds: string;
-	cache_ttl_tokens_seconds: string;
-	cache_ttl_channels_seconds: string;
-	cache_ttl_call_tokens_seconds: string;
-	cache_ttl_settings_seconds: string;
 };
 
 export type TokenForm = {

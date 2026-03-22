@@ -154,10 +154,16 @@ bun run check
 关键配置位于 `apps/worker/wrangler.toml`：
 
 - D1: `DB`
+- KV（热点只读数据）: `KV_HOT`
 - Static Assets: `ASSETS`（目录 `../ui/dist`）
 - Queue: `USAGE_QUEUE`（`usage-events`）
 - Durable Objects: `CHECKIN_SCHEDULER`, `USAGE_LIMITER`
 - 可选环境绑定：`CORS_ORIGIN`（用于限制管理台跨域来源）
+
+注意：
+
+- 仓库中的 `database_id` / `KV namespace id` 使用占位值，避免提交个人账号资源 ID。
+- GitHub Actions 部署流程会自动“检查/创建资源并回填真实 ID”后再部署，因此不影响他人一键初始化。
 
 ### 前端开发代理
 

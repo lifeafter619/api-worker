@@ -1,6 +1,5 @@
 import type {
 	D1Database,
-	DurableObjectNamespace,
 	ExecutionContext,
 } from "@cloudflare/workers-types";
 import type { Bindings } from "../env";
@@ -8,7 +7,6 @@ import {
 	recordChannelModelError,
 	upsertChannelModelCapabilities,
 } from "./channel-model-capabilities";
-import { recordRuntimeEvent } from "./runtime-events";
 import type { UsageInput } from "./usage";
 import { recordUsage } from "./usage";
 
@@ -56,10 +54,9 @@ function resolveNowSeconds(value?: number): number {
 export async function processUsageQueueEvent(
 	db: D1Database,
 	event: UsageQueueEvent,
-	cacheVersionStore?: DurableObjectNamespace,
 ): Promise<void> {
 	if (event.type === "usage") {
-		await recordUsage(db, event.payload, cacheVersionStore);
+		await recordUsage(db, event.payload);
 		return;
 	}
 	if (event.type === "capability_upsert") {
@@ -89,24 +86,12 @@ export async function handleUsageQueue(
 	env: Bindings,
 	ctx: ExecutionContext,
 ): Promise<void> {
+	const db = env.DB;
 	const tasks = batch.messages.map(async (message) => {
 		try {
-			await processUsageQueueEvent(
-				env.DB,
-				message.body,
-				env.CACHE_VERSION_STORE,
-			);
+			await processUsageQueueEvent(db, message.body);
 			message.ack();
-		} catch (error) {
-			await recordRuntimeEvent(env.DB, {
-				level: "error",
-				code: "usage_queue_consume_failed",
-				message: "usage_queue_consume_failed",
-				context: {
-					queue: batch.queue,
-					error: error instanceof Error ? error.message : String(error),
-				},
-			}).catch(() => undefined);
+		} catch {
 			message.retry();
 		}
 	});
