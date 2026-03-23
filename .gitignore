@@ -2,12 +2,10 @@
 **/dist
 **/.DS_Store
 **/.env
-**/dist
+**/.env.*
 **/.wrangler
 **/target
 **/tests
 
 .helloagents/plan
 .helloagents/archive
-
-
