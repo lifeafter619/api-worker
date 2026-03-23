@@ -217,9 +217,44 @@ function hasChatToolOutputHint(
 			continue;
 		}
 		const toolCallId = normalizeStringField(
-			record.tool_call_id ?? record.toolCallId ?? record.call_id,
+			record.tool_call_id ??
+				record.toolCallId ??
+				record.call_id ??
+				record.callId,
 		);
 		if (toolCallId) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function hasAssistantToolCallHint(
+	body: Record<string, unknown> | null,
+): boolean {
+	if (!body || !Array.isArray(body.messages)) {
+		return false;
+	}
+	for (const message of body.messages) {
+		if (!message || typeof message !== "object" || Array.isArray(message)) {
+			continue;
+		}
+		const record = message as Record<string, unknown>;
+		const role = normalizeStringField(record.role)?.toLowerCase();
+		if (role !== "assistant") {
+			continue;
+		}
+		if (Array.isArray(record.tool_calls) || Array.isArray(record.toolCalls)) {
+			return true;
+		}
+		const functionCall =
+			record.function_call ??
+			record.functionCall;
+		if (
+			functionCall &&
+			typeof functionCall === "object" &&
+			!Array.isArray(functionCall)
+		) {
 			return true;
 		}
 	}
@@ -255,27 +290,36 @@ function validateOpenAiChatToolCallChain(
 		if (role === "assistant") {
 			const toolCalls = Array.isArray(message.tool_calls)
 				? message.tool_calls
-				: [];
+				: Array.isArray(message.toolCalls)
+					? message.toolCalls
+					: [];
 			for (const call of toolCalls) {
 				if (!call || typeof call !== "object" || Array.isArray(call)) {
 					continue;
 				}
 				const callRecord = call as Record<string, unknown>;
 				const callId = normalizeStringField(
-					callRecord.id ?? callRecord.call_id,
+					callRecord.id ?? callRecord.call_id ?? callRecord.callId,
 				);
 				if (callId) {
 					seenToolCallIds.add(callId);
 				}
 			}
 			const legacyFunctionCall =
-				message.function_call &&
-				typeof message.function_call === "object" &&
-				!Array.isArray(message.function_call)
+				(message.function_call &&
+					typeof message.function_call === "object" &&
+					!Array.isArray(message.function_call)
 					? (message.function_call as Record<string, unknown>)
-					: null;
+					: null) ??
+				(message.functionCall &&
+					typeof message.functionCall === "object" &&
+					!Array.isArray(message.functionCall)
+					? (message.functionCall as Record<string, unknown>)
+					: null);
 			const legacyCallId = normalizeStringField(
-				legacyFunctionCall?.id ?? legacyFunctionCall?.call_id,
+				legacyFunctionCall?.id ??
+					legacyFunctionCall?.call_id ??
+					legacyFunctionCall?.callId,
 			);
 			if (legacyCallId) {
 				seenToolCallIds.add(legacyCallId);
@@ -347,8 +391,12 @@ function validateOpenAiResponsesToolCallChain(
 		const itemType = normalizeStringField(item.type)?.toLowerCase();
 		if (itemType === "function_call") {
 			const callId = normalizeStringField(item.call_id ?? item.id);
+			const callIdAlt = normalizeStringField(item.callId);
 			if (callId) {
 				seenFunctionCallIds.add(callId);
+			}
+			if (callIdAlt) {
+				seenFunctionCallIds.add(callIdAlt);
 			}
 			continue;
 		}
@@ -356,7 +404,10 @@ function validateOpenAiResponsesToolCallChain(
 			continue;
 		}
 		const outputCallId = normalizeStringField(
-			item.call_id ?? item.tool_call_id ?? item.toolCallId,
+			item.call_id ??
+				item.callId ??
+				item.tool_call_id ??
+				item.toolCallId,
 		);
 		if (!outputCallId || seenFunctionCallIds.has(outputCallId)) {
 			continue;
@@ -385,15 +436,69 @@ function validateOpenAiResponsesToolCallChain(
 	};
 }
 
+function validateOpenAiResponsesChatMessageChain(
+	body: Record<string, unknown> | null,
+	hints: ResponsesRequestHints | null,
+): ToolCallChainValidationIssue | null {
+	if (!body) {
+		return null;
+	}
+	const hasChatToolOutput = hasChatToolOutputHint(body);
+	if (!hasChatToolOutput) {
+		return null;
+	}
+	const hasAssistantCalls = hasAssistantToolCallHint(body);
+	if (!hasAssistantCalls) {
+		const message =
+			"tool_call_chain_invalid_local: responses request contains tool messages but assistant tool_calls are missing in messages";
+		return {
+			code: "tool_call_chain_invalid_local",
+			message,
+			errorMetaJson: JSON.stringify({
+				type: "local_validation",
+				source: "responses_chat_messages",
+				status: 409,
+				reason: "assistant_tool_calls_missing",
+			}),
+		};
+	}
+	if (!hints?.previousResponseId && !hints?.hasFunctionCallOutput) {
+		const message =
+			"tool_call_chain_invalid_local: responses request carries chat-style tool messages without previous_response_id";
+		return {
+			code: "tool_call_chain_invalid_local",
+			message,
+			errorMetaJson: JSON.stringify({
+				type: "local_validation",
+				source: "responses_chat_messages",
+				status: 409,
+				reason: "missing_previous_response_id",
+			}),
+		};
+	}
+	return null;
+}
+
 function validateOpenAiToolCallChain(
 	body: Record<string, unknown> | null,
 	endpointType: EndpointType,
 	hints: ResponsesRequestHints | null,
 ): ToolCallChainValidationIssue | null {
+	const chatIssue = validateOpenAiChatToolCallChain(body);
+	if (chatIssue) {
+		return chatIssue;
+	}
 	if (endpointType === "chat") {
-		return validateOpenAiChatToolCallChain(body);
+		return null;
 	}
 	if (endpointType === "responses") {
+		const responsesChatIssue = validateOpenAiResponsesChatMessageChain(
+			body,
+			hints,
+		);
+		if (responsesChatIssue) {
+			return responsesChatIssue;
+		}
 		return validateOpenAiResponsesToolCallChain(
 			body,
 			hints?.previousResponseId ?? null,
