@@ -138,8 +138,6 @@ export const UsageView = ({
 		{ id: "first_token", label: "首 token 延迟 (s)" },
 		{ id: "stream", label: "流式" },
 		{ id: "reasoning", label: "推理强度" },
-		{ id: "failure_stage", label: "失败阶段" },
-		{ id: "usage_source", label: "Usage 来源" },
 		{ id: "status", label: "状态码" },
 	];
 	const [visibleColumns, setVisibleColumns] = useState(() =>
@@ -448,16 +446,6 @@ export const UsageView = ({
 											</Tooltip>
 										</th>
 									)}
-									{visibleColumnSet.has("failure_stage") && (
-										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
-											失败阶段
-										</th>
-									)}
-									{visibleColumnSet.has("usage_source") && (
-										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
-											Usage 来源
-										</th>
-									)}
 									{visibleColumnSet.has("status") && (
 										<th class="sticky top-0 bg-[color:var(--app-surface-strong)]/95">
 											状态码
@@ -552,16 +540,6 @@ export const UsageView = ({
 												{visibleColumnSet.has("reasoning") && (
 													<td class="px-3 py-2.5 text-left text-xs text-[color:var(--app-ink)] sm:text-sm">
 														{log.reasoning_effort ?? "-"}
-													</td>
-												)}
-												{visibleColumnSet.has("failure_stage") && (
-													<td class="px-3 py-2.5 text-left text-xs text-[color:var(--app-ink)] sm:text-sm">
-														{log.failure_stage ?? "-"}
-													</td>
-												)}
-												{visibleColumnSet.has("usage_source") && (
-													<td class="px-3 py-2.5 text-left text-xs text-[color:var(--app-ink)] sm:text-sm">
-														{log.usage_source ?? "-"}
 													</td>
 												)}
 												{visibleColumnSet.has("status") && (
@@ -682,7 +660,7 @@ export const UsageView = ({
 									<span>{formatSeconds(activeErrorLog.latency_ms)}</span>
 								</div>
 								<div class="flex items-center justify-between gap-3">
-									<span class="text-[color:var(--app-ink-muted)]">失败阶段</span>
+									<span class="text-[color:var(--app-ink-muted)]">异常阶段</span>
 									<span>{activeErrorLog.failure_stage ?? "-"}</span>
 								</div>
 								<div class="flex items-center justify-between gap-3">
