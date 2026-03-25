@@ -643,129 +643,16 @@ export const SettingsView = ({
         <Card class="app-settings-group">
           <div class="app-settings-group__header">
             <h4 class="app-settings-group__title">用量队列</h4>
-            <p class="app-settings-group__caption">日志写入分流与状态</p>
+            <p class="app-settings-group__caption">已移除</p>
           </div>
           <div class="app-settings-list">
             <div class="app-settings-row">
               <div class="app-settings-row__main">
-                <span class="app-settings-row__label">启用用量队列</span>
+                <span class="app-settings-row__label">当前策略</span>
                 <p class="app-settings-row__hint">
-                  启用后将按比例把 usage 写入队列。
+                  队列写入已移除，usage 与尝试日志改为直接写入数据库。
                 </p>
               </div>
-              <div class="app-settings-row__switch">
-                <Switch
-                  checked={settingsForm.proxy_usage_queue_enabled}
-                  onToggle={(next) => {
-                    onFormChange({ proxy_usage_queue_enabled: next });
-                  }}
-                />
-              </div>
-            </div>
-            <div class="app-settings-row">
-              <div class="app-settings-row__main">
-                <label
-                  class="app-settings-row__label"
-                  for="usage-queue-daily-limit"
-                >
-                  队列日限额
-                </label>
-                <p class="app-settings-row__hint">
-                  达到上限后自动切回 Worker 直写。
-                </p>
-              </div>
-              <Input
-                class="app-settings-row__control app-settings-row__control--compact"
-                id="usage-queue-daily-limit"
-                name="usage_queue_daily_limit"
-                type="number"
-                min="0"
-                value={settingsForm.usage_queue_daily_limit}
-                onInput={(event) => {
-                  const target = event.currentTarget as HTMLInputElement | null;
-                  onFormChange({
-                    usage_queue_daily_limit: target?.value ?? "",
-                  });
-                }}
-              />
-            </div>
-            <div class="app-settings-row">
-              <div class="app-settings-row__main">
-                <label
-                  class="app-settings-row__label"
-                  for="usage-queue-direct-ratio"
-                >
-                  直写比例（%）
-                </label>
-                <p class="app-settings-row__hint">
-                  输入 0-100 的整数，例如 40 表示 40% 直写。
-                </p>
-              </div>
-              <div class="relative app-settings-row__control app-settings-row__control--compact">
-                <Input
-                  class="w-full pr-6"
-                  id="usage-queue-direct-ratio"
-                  name="usage_queue_direct_write_ratio"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={settingsForm.usage_queue_direct_write_ratio}
-                  onInput={(event) => {
-                    const target =
-                      event.currentTarget as HTMLInputElement | null;
-                    onFormChange({
-                      usage_queue_direct_write_ratio: target?.value ?? "",
-                    });
-                  }}
-                />
-                <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-[color:var(--app-ink-muted)]">
-                  %
-                </span>
-              </div>
-            </div>
-          </div>
-          <div class="app-settings-stats">
-            <div class="app-settings-stat">
-              <div class="app-settings-stat__label">队列绑定</div>
-              <div class="app-settings-stat__value">{queueBoundValue}</div>
-            </div>
-            <div class="app-settings-stat">
-              <div class="app-settings-stat__label">队列实际生效</div>
-              <div class="app-settings-stat__value">{queueActiveValue}</div>
-            </div>
-            <div class="app-settings-stat">
-              <div class="app-settings-stat__label">队列预占数量</div>
-              <div class="app-settings-stat__value">{queueReservedValue}</div>
-              <div class="app-settings-stat__hint">
-                {usageQueueStatus?.date
-                  ? `统计日期：${usageQueueStatus.date}`
-                  : "统计日期：-"}
-              </div>
-            </div>
-            <div class="app-settings-stat">
-              <div class="app-settings-stat__label">真实入队数量</div>
-              <div class="app-settings-stat__value">
-                {queueEnqueueSuccessValue}
-              </div>
-            </div>
-            <div class="app-settings-stat">
-              <div class="app-settings-stat__label">真实直写数量</div>
-              <div class="app-settings-stat__value">{queueDirectValue}</div>
-            </div>
-            <div class="app-settings-stat">
-              <div class="app-settings-stat__label">回退直写数量</div>
-              <div class="app-settings-stat__value">
-                {queueFallbackDirectValue}
-              </div>
-            </div>
-            <div class="app-settings-stat">
-              <div class="app-settings-stat__label">队列比例（实际/目标）</div>
-              <div class="app-settings-stat__value">{queueRatioValue}</div>
-            </div>
-            <div class="app-settings-stat">
-              <div class="app-settings-stat__label">直写比例（实际/目标）</div>
-              <div class="app-settings-stat__value">{directRatioValue}</div>
             </div>
           </div>
         </Card>

@@ -17,10 +17,6 @@ import {
 	setRetentionDays,
 	setSessionTtlHours,
 } from "../services/settings";
-import {
-	getUsageLimiterStub,
-	getUsageQueueStatus,
-} from "../services/usage-limiter";
 import { sha256Hex } from "../utils/crypto";
 import { jsonError } from "../utils/http";
 
@@ -62,10 +58,10 @@ settings.get("/", async (c) => {
 	const emptyUsageQueueStatus: UsageQueueStatusView = {
 		count: null,
 		date: null,
-		limit: runtimeSettings.usage_queue_daily_limit,
-		enabled: runtimeSettings.usage_queue_enabled,
-		bound: runtimeConfig.usage_queue_bound,
-		active: runtimeConfig.usage_queue_active,
+		limit: 0,
+		enabled: false,
+		bound: false,
+		active: false,
 		reserved_count: null,
 		enqueue_success_count: null,
 		direct_count: null,
@@ -73,50 +69,14 @@ settings.get("/", async (c) => {
 		reserve_failed_count: null,
 		reserve_over_limit_count: null,
 		queue_send_failed_count: null,
-		target_queue_ratio: 1 - runtimeSettings.usage_queue_direct_write_ratio,
-		target_direct_ratio: runtimeSettings.usage_queue_direct_write_ratio,
+		target_queue_ratio: 0,
+		target_direct_ratio: 1,
 		effective_queue_ratio: null,
 		effective_direct_ratio: null,
 		effective_total_count: null,
 	};
 
-	let usageQueueStatus: UsageQueueStatusView = emptyUsageQueueStatus;
-	if (c.env.USAGE_LIMITER) {
-		try {
-			const status = await getUsageQueueStatus(
-				getUsageLimiterStub(c.env.USAGE_LIMITER),
-			);
-			const effectiveTotal = status.enqueue_success_count + status.direct_count;
-			const effectiveQueueRatio =
-				effectiveTotal > 0
-					? status.enqueue_success_count / effectiveTotal
-					: null;
-			const effectiveDirectRatio =
-				effectiveTotal > 0 ? status.direct_count / effectiveTotal : null;
-			usageQueueStatus = {
-				count: status.count,
-				date: status.date,
-				limit: runtimeSettings.usage_queue_daily_limit,
-				enabled: runtimeSettings.usage_queue_enabled,
-				bound: runtimeConfig.usage_queue_bound,
-				active: runtimeConfig.usage_queue_active,
-				reserved_count: status.reserved_count,
-				enqueue_success_count: status.enqueue_success_count,
-				direct_count: status.direct_count,
-				fallback_direct_count: status.fallback_direct_count,
-				reserve_failed_count: status.reserve_failed_count,
-				reserve_over_limit_count: status.reserve_over_limit_count,
-				queue_send_failed_count: status.queue_send_failed_count,
-				target_queue_ratio: 1 - runtimeSettings.usage_queue_direct_write_ratio,
-				target_direct_ratio: runtimeSettings.usage_queue_direct_write_ratio,
-				effective_queue_ratio: effectiveQueueRatio,
-				effective_direct_ratio: effectiveDirectRatio,
-				effective_total_count: effectiveTotal,
-			};
-		} catch {
-			usageQueueStatus = emptyUsageQueueStatus;
-		}
-	}
+	const usageQueueStatus: UsageQueueStatusView = emptyUsageQueueStatus;
 
 	return c.json({
 		log_retention_days: retention,
@@ -160,9 +120,6 @@ settings.put("/", async (c) => {
 		stream_usage_parse_timeout_ms?: number;
 		responses_affinity_ttl_seconds?: number;
 		stream_options_capability_ttl_seconds?: number;
-		usage_queue_enabled?: boolean;
-		usage_queue_daily_limit?: number;
-		usage_queue_direct_write_ratio?: number;
 		attempt_worker_fallback_enabled?: boolean;
 		attempt_worker_fallback_threshold?: number;
 		large_request_offload_threshold_bytes?: number;
@@ -378,61 +335,6 @@ settings.put("/", async (c) => {
 			);
 		}
 		runtimePatch.stream_options_capability_ttl_seconds = ttlSeconds;
-		runtimeTouched = true;
-	}
-
-	if (body.proxy_usage_queue_enabled !== undefined) {
-		const raw = body.proxy_usage_queue_enabled;
-		let enabled: boolean | null = null;
-		if (typeof raw === "boolean") {
-			enabled = raw;
-		} else if (typeof raw === "number") {
-			enabled = raw !== 0;
-		} else if (typeof raw === "string") {
-			const normalized = raw.trim().toLowerCase();
-			if (["1", "true", "yes", "on"].includes(normalized)) {
-				enabled = true;
-			} else if (["0", "false", "no", "off"].includes(normalized)) {
-				enabled = false;
-			}
-		}
-		if (enabled === null) {
-			return jsonError(
-				c,
-				400,
-				"invalid_proxy_usage_queue_enabled",
-				"invalid_proxy_usage_queue_enabled",
-			);
-		}
-		runtimePatch.usage_queue_enabled = enabled;
-		runtimeTouched = true;
-	}
-
-	if (body.usage_queue_daily_limit !== undefined) {
-		const limit = Number(body.usage_queue_daily_limit);
-		if (Number.isNaN(limit) || limit < 0) {
-			return jsonError(
-				c,
-				400,
-				"invalid_usage_queue_daily_limit",
-				"invalid_usage_queue_daily_limit",
-			);
-		}
-		runtimePatch.usage_queue_daily_limit = Math.floor(limit);
-		runtimeTouched = true;
-	}
-
-	if (body.usage_queue_direct_write_ratio !== undefined) {
-		const ratio = Number(body.usage_queue_direct_write_ratio);
-		if (Number.isNaN(ratio) || ratio < 0 || ratio > 1) {
-			return jsonError(
-				c,
-				400,
-				"invalid_usage_queue_direct_write_ratio",
-				"invalid_usage_queue_direct_write_ratio",
-			);
-		}
-		runtimePatch.usage_queue_direct_write_ratio = ratio;
 		runtimeTouched = true;
 	}
 

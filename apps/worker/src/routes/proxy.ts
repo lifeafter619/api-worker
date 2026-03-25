@@ -60,12 +60,6 @@ import {
 } from "../services/hot-kv";
 import { getCacheConfig, getProxyRuntimeSettings } from "../services/settings";
 import {
-	getUsageLimiterStub,
-	reserveUsageQueue,
-	trackUsageQueue,
-	type UsageQueueTrackKind,
-} from "../services/usage-limiter";
-import {
 	processUsageQueueEvent,
 	type UsageQueueEvent,
 } from "../services/usage-queue";
@@ -142,9 +136,6 @@ const STREAM_USAGE_NON_ERROR_THROWN_CODE =
 const PROXY_UPSTREAM_TIMEOUT_ERROR_CODE = "proxy_upstream_timeout";
 const PROXY_UPSTREAM_FETCH_ERROR_CODE = "proxy_upstream_fetch_exception";
 const USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE = "usage_zero_completion_tokens";
-const INTERNAL_USAGE_RESERVE_TIMEOUT_MS = 600;
-const INTERNAL_USAGE_QUEUE_SEND_TIMEOUT_MS = 1500;
-const INTERNAL_USAGE_RESERVE_BREAKER_MS = 60_000;
 const INTERNAL_USAGE_ERROR_MESSAGE_MAX_LENGTH = 320;
 const UPSTREAM_ERROR_DETAIL_MAX_LENGTH = 240;
 const HOT_KV_ACTIVE_CHANNELS_TTL_SECONDS = 60;
@@ -1321,210 +1312,11 @@ function getStreamUsageMaxParsers(settings: {
 	return maxParsers;
 }
 
-function withTimeout<T>(
-	task: Promise<T>,
-	timeoutMs: number,
-	timeoutCode: string,
-): Promise<T> {
-	if (timeoutMs <= 0) {
-		return task;
-	}
-	return new Promise<T>((resolve, reject) => {
-		const timer = setTimeout(() => {
-			reject(new Error(timeoutCode));
-		}, timeoutMs);
-		task.then(
-			(value) => {
-				clearTimeout(timer);
-				resolve(value);
-			},
-			(error) => {
-				clearTimeout(timer);
-				reject(error);
-			},
-		);
-	});
-}
-
-function hashFNV1a32(input: string): number {
-	let hash = 0x811c9dc5;
-	for (let i = 0; i < input.length; i += 1) {
-		hash ^= input.charCodeAt(i);
-		hash = Math.imul(hash, 0x01000193);
-	}
-	return hash >>> 0;
-}
-
-function shouldDirectWriteByRatio(
-	dispatchKey: string,
-	directRatio: number,
-): boolean {
-	if (directRatio <= 0) {
-		return false;
-	}
-	if (directRatio >= 1) {
-		return true;
-	}
-	const bucket = hashFNV1a32(dispatchKey) / 0x1_0000_0000;
-	return bucket < directRatio;
-}
-
 function createUsageEventScheduler(
 	c: { env: AppEnv["Bindings"]; executionCtx?: ExecutionContextLike },
-	settings: {
-		usage_queue_enabled: boolean;
-		usage_queue_daily_limit: number;
-		usage_queue_direct_write_ratio: number;
-	},
-	diagnostics: {
-		requestPath?: string | null;
-		method?: string | null;
-		tokenId?: string | null;
-		model?: string | null;
-		requestSeed?: string | null;
-	},
 ): (event: UsageQueueEvent) => void {
-	const queue = c.env.USAGE_QUEUE;
-	const queueBound = Boolean(queue);
-	const queueEnabled = settings.usage_queue_enabled && queueBound;
-	const limiter = c.env.USAGE_LIMITER
-		? getUsageLimiterStub(c.env.USAGE_LIMITER)
-		: null;
-	const directRatio = settings.usage_queue_direct_write_ratio;
-	const dailyLimit = settings.usage_queue_daily_limit;
-	const reserveTimeoutMs = INTERNAL_USAGE_RESERVE_TIMEOUT_MS;
-	const queueSendTimeoutMs = INTERNAL_USAGE_QUEUE_SEND_TIMEOUT_MS;
-	const reserveBreakerMs = INTERNAL_USAGE_RESERVE_BREAKER_MS;
-	const requestSeed = diagnostics.requestSeed ?? String(Date.now());
-	let overLimit = false;
-	let reserveBreakerUntil = 0;
-	let dispatchSequence = 0;
-
-	const trackQueueMetric = (kind: UsageQueueTrackKind): void => {
-		if (!limiter) {
-			return;
-		}
-		const task = withTimeout(
-			trackUsageQueue(limiter, { kind }),
-			reserveTimeoutMs,
-			"usage_track_timeout",
-		)
-			.then(() => undefined)
-			.catch(() => undefined);
-		scheduleDbWrite(c, task);
-	};
-
-	const buildDispatchKey = (event: UsageQueueEvent): string => {
-		dispatchSequence += 1;
-		return [
-			requestSeed,
-			diagnostics.tokenId ?? "anonymous",
-			diagnostics.requestPath ?? "-",
-			diagnostics.model ?? "-",
-			event.type,
-			String(dispatchSequence),
-		].join(":");
-	};
-
-	type QueueDecision = {
-		useQueue: boolean;
-		reason:
-			| "queue_disabled"
-			| "over_limit"
-			| "reserve_breaker"
-			| "direct_ratio"
-			| "reserve_failed"
-			| "allowed";
-	};
-
-	const shouldUseQueue = async (
-		dispatchKey: string,
-	): Promise<QueueDecision> => {
-		if (!queueEnabled) {
-			return {
-				useQueue: false,
-				reason: "queue_disabled",
-			};
-		}
-		if (overLimit) {
-			return {
-				useQueue: false,
-				reason: "over_limit",
-			};
-		}
-		if (Date.now() < reserveBreakerUntil) {
-			return {
-				useQueue: false,
-				reason: "reserve_breaker",
-			};
-		}
-		if (shouldDirectWriteByRatio(dispatchKey, directRatio)) {
-			return {
-				useQueue: false,
-				reason: "direct_ratio",
-			};
-		}
-		if (!limiter || dailyLimit <= 0) {
-			return {
-				useQueue: true,
-				reason: "allowed",
-			};
-		}
-		try {
-			const result = await withTimeout(
-				reserveUsageQueue(limiter, {
-					limit: dailyLimit,
-					amount: 1,
-				}),
-				reserveTimeoutMs,
-				"usage_reserve_timeout",
-			);
-			if (!result.allowed) {
-				overLimit = true;
-			}
-			return {
-				useQueue: result.allowed,
-				reason: result.allowed ? "allowed" : "over_limit",
-			};
-		} catch (error) {
-			reserveBreakerUntil = Date.now() + reserveBreakerMs;
-			void error;
-			return {
-				useQueue: false,
-				reason: "reserve_failed",
-			};
-		}
-	};
-
 	return (event: UsageQueueEvent) => {
-		const task = (async () => {
-			const dispatchKey = buildDispatchKey(event);
-			const decision = await shouldUseQueue(dispatchKey);
-			if (decision.useQueue && queue) {
-				try {
-					await withTimeout(
-						queue.send(event),
-						queueSendTimeoutMs,
-						"usage_queue_send_timeout",
-					);
-					trackQueueMetric("enqueue_success");
-					return;
-				} catch (error) {
-					trackQueueMetric("queue_send_failed");
-					trackQueueMetric("fallback_direct");
-					void error;
-				}
-			} else {
-				if (decision.reason === "reserve_failed") {
-					trackQueueMetric("reserve_failed");
-				} else if (decision.reason === "over_limit") {
-					trackQueueMetric("reserve_over_limit");
-				} else {
-					trackQueueMetric("direct");
-				}
-			}
-			await processUsageQueueEvent(c.env.DB, event);
-		})().catch(() => undefined);
+		const task = processUsageQueueEvent(c.env.DB, event).catch(() => undefined);
 		scheduleDbWrite(c, task);
 	};
 }
@@ -2206,13 +1998,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 			? hasChatToolOutputHintShared(parsedBody)
 			: false;
 	const reasoningEffort = extractReasoningEffort(parsedBody);
-	const scheduleUsageEvent = createUsageEventScheduler(c, runtimeSettings, {
-		requestPath,
-		method: c.req.method,
-		tokenId: tokenRecord.id,
-		model: downstreamModel,
-		requestSeed: String(requestStart),
-	});
+	const scheduleUsageEvent = createUsageEventScheduler(c);
 	let normalizedChat: NormalizedChatRequest | null = null;
 	let normalizedEmbedding: NormalizedEmbeddingRequest | null = null;
 	let normalizedImage: NormalizedImageRequest | null = null;

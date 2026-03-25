@@ -11,3 +11,22 @@ enabled = true
 [placement]
 mode = "smart"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "api-worker"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[kv_namespaces]]
+binding = "KV_HOT"
+# Replaced by CI during deployment
+id = "00000000000000000000000000000000"
+
+[[durable_objects.bindings]]
+name = "CACHE_VERSION_STORE"
+class_name = "CacheVersionStore"
+script_name = "api-worker"
+
+[[durable_objects.bindings]]
+name = "CHECKIN_SCHEDULER"
+class_name = "CheckinScheduler"
+script_name = "api-worker"

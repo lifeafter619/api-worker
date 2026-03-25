@@ -32,26 +32,12 @@ name = "CHECKIN_SCHEDULER"
 class_name = "CheckinScheduler"
 
 [[durable_objects.bindings]]
-name = "USAGE_LIMITER"
-class_name = "UsageLimiter"
-
-[[durable_objects.bindings]]
 name = "CACHE_VERSION_STORE"
 class_name = "CacheVersionStore"
 
 [[services]]
 binding = "ATTEMPT_WORKER"
 service = "attempt-worker"
-
-[[queues.producers]]
-queue = "usage-events"
-binding = "USAGE_QUEUE"
-
-[[queues.consumers]]
-queue = "usage-events"
-max_batch_size = 10
-max_batch_timeout = 30
-max_retries = 3
 
 [[migrations]]
 tag = "v1"

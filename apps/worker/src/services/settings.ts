@@ -452,18 +452,9 @@ export async function getProxyRuntimeSettings(
 		settings[PROXY_STREAM_OPTIONS_CAPABILITY_TTL_KEY] ?? null,
 		DEFAULT_PROXY_STREAM_OPTIONS_CAPABILITY_TTL_SECONDS,
 	);
-	const usageQueueEnabled = parseBooleanSetting(
-		settings[PROXY_USAGE_QUEUE_ENABLED_KEY] ?? null,
-		DEFAULT_PROXY_USAGE_QUEUE_ENABLED,
-	);
-	const usageQueueDailyLimit = parseNonNegativeSetting(
-		settings[USAGE_QUEUE_DAILY_LIMIT_KEY] ?? null,
-		DEFAULT_USAGE_QUEUE_DAILY_LIMIT,
-	);
-	const usageQueueDirectWriteRatio = parseRatioSetting(
-		settings[USAGE_QUEUE_DIRECT_WRITE_RATIO_KEY] ?? null,
-		DEFAULT_USAGE_QUEUE_DIRECT_WRITE_RATIO,
-	);
+	const usageQueueEnabled = false;
+	const usageQueueDailyLimit = 0;
+	const usageQueueDirectWriteRatio = 1;
 	const attemptWorkerFallbackEnabled = parseBooleanSetting(
 		settings[PROXY_ATTEMPT_WORKER_FALLBACK_ENABLED_KEY] ?? null,
 		DEFAULT_PROXY_ATTEMPT_WORKER_FALLBACK_ENABLED,
@@ -517,16 +508,14 @@ export function getRuntimeProxyConfig(
 	env: Bindings,
 	settings: ProxyRuntimeSettings,
 ): RuntimeProxyConfig {
-	const usageQueueBound = Boolean(env.USAGE_QUEUE);
-	const usageQueueEnabled = settings.usage_queue_enabled;
 	const attemptWorkerBound = Boolean(env.ATTEMPT_WORKER);
 	return {
 		...settings,
 		attempt_worker_bound: attemptWorkerBound,
 		attempt_worker_fallback_active:
 			attemptWorkerBound && settings.attempt_worker_fallback_enabled,
-		usage_queue_bound: usageQueueBound,
-		usage_queue_active: usageQueueEnabled && usageQueueBound,
+		usage_queue_bound: false,
+		usage_queue_active: false,
 	};
 }
 
@@ -632,33 +621,6 @@ export async function setProxyRuntimeSettings(
 				String(
 					Math.max(1, Math.floor(update.stream_options_capability_ttl_seconds)),
 				),
-			),
-		);
-	}
-	if (update.usage_queue_enabled !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				PROXY_USAGE_QUEUE_ENABLED_KEY,
-				update.usage_queue_enabled ? "1" : "0",
-			),
-		);
-	}
-	if (update.usage_queue_daily_limit !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				USAGE_QUEUE_DAILY_LIMIT_KEY,
-				String(Math.max(0, Math.floor(update.usage_queue_daily_limit))),
-			),
-		);
-	}
-	if (update.usage_queue_direct_write_ratio !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				USAGE_QUEUE_DIRECT_WRITE_RATIO_KEY,
-				String(update.usage_queue_direct_write_ratio),
 			),
 		);
 	}

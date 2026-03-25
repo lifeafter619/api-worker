@@ -10,12 +10,11 @@ import newapiChannelRoutes from "./routes/newapiChannels";
 import newapiGroupRoutes from "./routes/newapiGroups";
 import newapiUserRoutes from "./routes/newapiUsers";
 import attemptEventsRoutes from "./routes/attempt-events";
-import proxyRoutes from "./routes/proxy";
+import proxyForwardRoutes from "./routes/proxy-forward";
 import settingsRoutes from "./routes/settings";
 import siteRoutes from "./routes/sites";
 import tokenRoutes from "./routes/tokens";
 import usageRoutes from "./routes/usage";
-import { handleUsageQueue } from "./services/usage-queue";
 import { warmupWasmCore } from "./wasm/core";
 
 const app = new Hono<AppEnv>({ strict: false });
@@ -83,8 +82,8 @@ app.route("/api/channel", newapiChannelRoutes);
 app.route("/api/user", newapiUserRoutes);
 app.route("/api/group", newapiGroupRoutes);
 
-app.route("/v1", proxyRoutes);
-app.route("/v1beta", proxyRoutes);
+app.route("/v1", proxyForwardRoutes);
+app.route("/v1beta", proxyForwardRoutes);
 
 app.onError((_, c) => {
 	if (
@@ -137,7 +136,6 @@ app.notFound(async (c) => {
 
 export default {
 	fetch: app.fetch,
-	queue: handleUsageQueue,
 };
 
 export { CacheVersionStore } from "./services/cache-version-store";

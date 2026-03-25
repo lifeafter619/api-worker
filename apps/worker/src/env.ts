@@ -3,9 +3,7 @@ import type {
 	DurableObjectNamespace,
 	Fetcher,
 	KVNamespace,
-	Queue,
 } from "@cloudflare/workers-types";
-import type { UsageQueueEvent } from "./services/usage-queue";
 
 export type Bindings = {
 	DB: D1Database;
@@ -16,9 +14,6 @@ export type Bindings = {
 	PROXY_STREAM_USAGE_MODE?: string;
 	PROXY_STREAM_USAGE_MAX_BYTES?: string;
 	PROXY_STREAM_USAGE_MAX_PARSERS?: string;
-	PROXY_USAGE_QUEUE_ENABLED?: string;
-	USAGE_QUEUE?: Queue<UsageQueueEvent>;
-	USAGE_LIMITER?: DurableObjectNamespace;
 	CACHE_VERSION_STORE?: DurableObjectNamespace;
 	CHECKIN_SCHEDULER: DurableObjectNamespace;
 };

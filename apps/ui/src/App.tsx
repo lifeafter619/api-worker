@@ -1367,10 +1367,6 @@ const App = () => {
 			const streamOptionsCapabilityTtlSeconds = Number(
 				settingsForm.proxy_stream_options_capability_ttl_seconds,
 			);
-			const usageQueueDailyLimit = Number(settingsForm.usage_queue_daily_limit);
-			const usageQueueDirectPercent = Number(
-				settingsForm.usage_queue_direct_write_ratio,
-			);
 			const attemptWorkerFallbackThreshold = Number(
 				settingsForm.proxy_attempt_worker_fallback_threshold,
 			);
@@ -1445,19 +1441,6 @@ const App = () => {
 				pushNotice("warning", "stream_options 能力 TTL 需为不小于 60 的整数");
 				return;
 			}
-			if (Number.isNaN(usageQueueDailyLimit) || usageQueueDailyLimit < 0) {
-				pushNotice("warning", "队列日限额需为非负整数");
-				return;
-			}
-			if (
-				Number.isNaN(usageQueueDirectPercent) ||
-				usageQueueDirectPercent < 0 ||
-				usageQueueDirectPercent > 100 ||
-				!Number.isInteger(usageQueueDirectPercent)
-			) {
-				pushNotice("warning", "直写比例需为 0-100 的整数");
-				return;
-			}
 			if (
 				Number.isNaN(attemptWorkerFallbackThreshold) ||
 				attemptWorkerFallbackThreshold < 1 ||
@@ -1496,9 +1479,6 @@ const App = () => {
 				proxy_responses_affinity_ttl_seconds: responsesAffinityTtlSeconds,
 				proxy_stream_options_capability_ttl_seconds:
 					streamOptionsCapabilityTtlSeconds,
-				proxy_usage_queue_enabled: settingsForm.proxy_usage_queue_enabled,
-				usage_queue_daily_limit: usageQueueDailyLimit,
-				usage_queue_direct_write_ratio: usageQueueDirectPercent / 100,
 				proxy_attempt_worker_fallback_enabled:
 					settingsForm.proxy_attempt_worker_fallback_enabled,
 				proxy_attempt_worker_fallback_threshold: attemptWorkerFallbackThreshold,
