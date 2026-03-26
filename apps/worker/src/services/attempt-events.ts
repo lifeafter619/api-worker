@@ -94,4 +94,3 @@ export async function pruneAttemptEvents(
 		.bind(cutoff.toISOString())
 		.run();
 }
-

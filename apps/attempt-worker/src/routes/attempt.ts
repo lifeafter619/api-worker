@@ -131,9 +131,8 @@ function normalizeRetryConfig(
 	payload: RetryConfigPayload | null | undefined,
 ): RetryConfig {
 	const sleepRaw = Number(payload?.sleepMs ?? 0);
-	const sleepMs = Number.isFinite(sleepRaw) && sleepRaw >= 0
-		? Math.floor(sleepRaw)
-		: 0;
+	const sleepMs =
+		Number.isFinite(sleepRaw) && sleepRaw >= 0 ? Math.floor(sleepRaw) : 0;
 	return {
 		sleepMs,
 		skipErrorCodeSet: new Set(
@@ -168,7 +167,10 @@ function resolveRetryDecision(
 } {
 	const normalizedCode = normalizeRetryErrorCode(errorCode);
 	const lookup: string[] = [];
-	if (normalizedCode === "pond_hub_error" && isNoAvailableChannelMessage(errorMessage)) {
+	if (
+		normalizedCode === "pond_hub_error" &&
+		isNoAvailableChannelMessage(errorMessage)
+	) {
 		lookup.push("model_not_found");
 	}
 	if (normalizedCode) {
@@ -237,7 +239,9 @@ async function extractErrorMessage(response: Response): Promise<string | null> {
 }
 
 async function extractErrorCode(response: Response): Promise<string | null> {
-	const direct = normalizeMessage(response.headers.get(ATTEMPT_ERROR_CODE_HEADER));
+	const direct = normalizeMessage(
+		response.headers.get(ATTEMPT_ERROR_CODE_HEADER),
+	);
 	if (direct) {
 		return direct;
 	}
@@ -358,9 +362,7 @@ function detectOpenAiEndpointType(path: string): "chat" | "responses" | null {
 	return null;
 }
 
-function parseJsonObjectBody(
-	bodyText: string,
-): Record<string, unknown> | null {
+function parseJsonObjectBody(bodyText: string): Record<string, unknown> | null {
 	try {
 		const parsed = JSON.parse(bodyText) as unknown;
 		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -399,7 +401,9 @@ function preflightOpenAiToolChain(
 	}
 	repairOpenAiToolCallChain(parsedBody, endpointType);
 	const hints =
-		endpointType === "responses" ? extractResponsesRequestHints(parsedBody) : null;
+		endpointType === "responses"
+			? extractResponsesRequestHints(parsedBody)
+			: null;
 	const issue = validateOpenAiToolCallChain(parsedBody, endpointType, hints);
 	if (issue) {
 		return {
@@ -457,7 +461,11 @@ async function executeSingleAttempt(
 			(response.status === 400 || response.status === 404) &&
 			body.fallbackTarget
 		) {
-			response = await fetchWithTimeout(body.fallbackTarget, requestInit, timeoutMs);
+			response = await fetchWithTimeout(
+				body.fallbackTarget,
+				requestInit,
+				timeoutMs,
+			);
 			responsePath = body.fallbackPath?.trim() || body.fallbackTarget;
 		}
 		return {
@@ -518,7 +526,11 @@ attempt.post("/dispatch", async (c) => {
 		attemptIndex: number;
 		channelId: string;
 	} | null = null;
-	for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+	for (
+		let attemptIndex = 0;
+		attemptIndex < attempts.length;
+		attemptIndex += 1
+	) {
 		const item = attempts[attemptIndex];
 		if (!item?.target || !item?.method) {
 			continue;
@@ -550,7 +562,11 @@ attempt.post("/dispatch", async (c) => {
 		const errorMessage = await extractErrorMessage(result.response);
 		const hasNextAttempt = attemptIndex + 1 < attempts.length;
 		if (hasNextAttempt) {
-			const decision = resolveRetryDecision(retryConfig, errorCode, errorMessage);
+			const decision = resolveRetryDecision(
+				retryConfig,
+				errorCode,
+				errorMessage,
+			);
 			if (decision.shouldSkip) {
 				return attachAttemptHeaders(result, {
 					[DISPATCH_ATTEMPT_INDEX_HEADER]: String(attemptIndex),
@@ -567,9 +583,14 @@ attempt.post("/dispatch", async (c) => {
 		return c.json({ error: "dispatch_no_valid_attempt" }, 400);
 	}
 	const lastErrorCode = await extractErrorCode(lastResult.result.response);
-	const lastErrorMessage = await extractErrorMessage(lastResult.result.response);
-	const shouldStopRetry =
-		resolveRetryDecision(retryConfig, lastErrorCode, lastErrorMessage).shouldSkip;
+	const lastErrorMessage = await extractErrorMessage(
+		lastResult.result.response,
+	);
+	const shouldStopRetry = resolveRetryDecision(
+		retryConfig,
+		lastErrorCode,
+		lastErrorMessage,
+	).shouldSkip;
 	return attachAttemptHeaders(lastResult.result, {
 		[DISPATCH_ATTEMPT_INDEX_HEADER]: String(lastResult.attemptIndex),
 		[DISPATCH_CHANNEL_ID_HEADER]: lastResult.channelId,

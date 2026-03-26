@@ -1,8 +1,8 @@
 {
-  "name": "@ai-workers/shared-core",
-  "private": true,
-  "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  }
+	"name": "@ai-workers/shared-core",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	}
 }

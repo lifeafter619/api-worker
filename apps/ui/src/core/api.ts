@@ -48,7 +48,8 @@ export const createApiFetch = (
 					: fallbackMessage;
 			if (payload?.code === "proxy_all_attempts_failed") {
 				const traceId =
-					typeof payload.trace_id === "string" && payload.trace_id.trim().length > 0
+					typeof payload.trace_id === "string" &&
+					payload.trace_id.trim().length > 0
 						? payload.trace_id
 						: response.headers.get("x-ha-trace-id");
 				const sampleFailure = Array.isArray(payload.failures)
@@ -59,7 +60,7 @@ export const createApiFetch = (
 					sampleFailure.error_message.trim().length > 0
 						? sampleFailure.error_message
 						: typeof sampleFailure?.error_code === "string" &&
-							  sampleFailure.error_code.trim().length > 0
+								sampleFailure.error_code.trim().length > 0
 							? sampleFailure.error_code
 							: null;
 				const attemptPart =

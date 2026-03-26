@@ -709,12 +709,11 @@ const App = () => {
 			),
 			proxy_retry_max_retries: String(runtimeSettings?.retry_max_retries ?? 5),
 			proxy_retry_sleep_ms: String(runtimeSettings?.retry_sleep_ms ?? 1000),
-			proxy_retry_skip_error_codes:
-				runtimeSettings?.retry_skip_error_codes ?? [
-					"model_not_found",
-					"no_available_providers",
-					"no_available_channels",
-				],
+			proxy_retry_skip_error_codes: runtimeSettings?.retry_skip_error_codes ?? [
+				"model_not_found",
+				"no_available_providers",
+				"no_available_channels",
+			],
 			proxy_retry_sleep_error_codes:
 				runtimeSettings?.retry_sleep_error_codes ?? [
 					"system_cpu_overloaded",
@@ -1375,9 +1374,7 @@ const App = () => {
 			const normalizeErrorCodeList = (value: string[]): string[] => {
 				return Array.from(
 					new Set(
-						value
-							.map((item) => String(item ?? "").trim())
-							.filter(Boolean),
+						value.map((item) => String(item ?? "").trim()).filter(Boolean),
 					),
 				);
 			};
@@ -1444,7 +1441,11 @@ const App = () => {
 				pushNotice("warning", "重发次数需为非负整数");
 				return;
 			}
-			if (Number.isNaN(retrySleepMs) || retrySleepMs < 0 || !Number.isInteger(retrySleepMs)) {
+			if (
+				Number.isNaN(retrySleepMs) ||
+				retrySleepMs < 0 ||
+				!Number.isInteger(retrySleepMs)
+			) {
 				pushNotice("warning", "统一等待时间需为非负整数");
 				return;
 			}

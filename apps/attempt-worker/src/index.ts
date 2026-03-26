@@ -1,8 +1,8 @@
 import { Hono } from "hono";
+import { warmupWasmCore } from "../../worker/src/wasm/core";
 import type { AppEnv } from "./env";
 import attemptRoutes from "./routes/attempt";
-import proxyRoutes from "../../worker/src/routes/proxy";
-import { warmupWasmCore } from "../../worker/src/wasm/core";
+import proxyRoutes from "./routes/proxy";
 
 const app = new Hono<AppEnv>({ strict: false });
 warmupWasmCore();

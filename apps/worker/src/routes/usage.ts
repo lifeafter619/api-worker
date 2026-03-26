@@ -237,16 +237,12 @@ usage.get("/", async (c) => {
 
 	const pageChannelIds = Array.from(
 		new Set(
-			logs
-				.map((row) => String(row.channel_id ?? "").trim())
-				.filter(Boolean),
+			logs.map((row) => String(row.channel_id ?? "").trim()).filter(Boolean),
 		),
 	);
 	const pageTokenIds = Array.from(
 		new Set(
-			logs
-				.map((row) => String(row.token_id ?? "").trim())
-				.filter(Boolean),
+			logs.map((row) => String(row.token_id ?? "").trim()).filter(Boolean),
 		),
 	);
 

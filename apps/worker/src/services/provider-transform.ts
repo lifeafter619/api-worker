@@ -144,7 +144,11 @@ function normalizeOpenAiBodyForWasm(
 	const nextBody: Record<string, unknown> = { ...body };
 	if (Array.isArray(body.messages)) {
 		nextBody.messages = body.messages.map((rawMessage) => {
-			if (!rawMessage || typeof rawMessage !== "object" || Array.isArray(rawMessage)) {
+			if (
+				!rawMessage ||
+				typeof rawMessage !== "object" ||
+				Array.isArray(rawMessage)
+			) {
 				return rawMessage;
 			}
 			const message = rawMessage as Record<string, unknown>;
@@ -174,27 +178,33 @@ function normalizeOpenAiBodyForWasm(
 				normalizedMessage.call_id = normalizedMessage.callId;
 			}
 			if (Array.isArray(normalizedMessage.tool_calls)) {
-				normalizedMessage.tool_calls = normalizedMessage.tool_calls.map((rawCall) => {
-					if (!rawCall || typeof rawCall !== "object" || Array.isArray(rawCall)) {
-						return rawCall;
-					}
-					const call = rawCall as Record<string, unknown>;
-					const normalizedCall: Record<string, unknown> = { ...call };
-					if (
-						normalizedCall.call_id === undefined &&
-						normalizedCall.callId !== undefined
-					) {
-						normalizedCall.call_id = normalizedCall.callId;
-					}
-					if (
-						normalizedCall.function === undefined &&
-						normalizedCall.functionCall !== undefined &&
-						typeof normalizedCall.functionCall === "object"
-					) {
-						normalizedCall.function = normalizedCall.functionCall;
-					}
-					return normalizedCall;
-				});
+				normalizedMessage.tool_calls = normalizedMessage.tool_calls.map(
+					(rawCall) => {
+						if (
+							!rawCall ||
+							typeof rawCall !== "object" ||
+							Array.isArray(rawCall)
+						) {
+							return rawCall;
+						}
+						const call = rawCall as Record<string, unknown>;
+						const normalizedCall: Record<string, unknown> = { ...call };
+						if (
+							normalizedCall.call_id === undefined &&
+							normalizedCall.callId !== undefined
+						) {
+							normalizedCall.call_id = normalizedCall.callId;
+						}
+						if (
+							normalizedCall.function === undefined &&
+							normalizedCall.functionCall !== undefined &&
+							typeof normalizedCall.functionCall === "object"
+						) {
+							normalizedCall.function = normalizedCall.functionCall;
+						}
+						return normalizedCall;
+					},
+				);
 			}
 			return normalizedMessage;
 		});
@@ -229,7 +239,10 @@ function normalizeOpenAiBodyForWasm(
 		) {
 			const item = rawInput as Record<string, unknown>;
 			const normalizedItem: Record<string, unknown> = { ...item };
-			if (normalizedItem.call_id === undefined && normalizedItem.callId !== undefined) {
+			if (
+				normalizedItem.call_id === undefined &&
+				normalizedItem.callId !== undefined
+			) {
 				normalizedItem.call_id = normalizedItem.callId;
 			}
 			if (

@@ -1,15 +1,6 @@
-import type {
-	D1Database,
-	DurableObjectNamespace,
-} from "@cloudflare/workers-types";
+import type { D1Database } from "@cloudflare/workers-types";
 import type { Bindings } from "../env";
 import { nowIso } from "../utils/time";
-import {
-	ALL_CACHE_VERSION_SCOPES,
-	bumpCacheVersionsInStore,
-	type CacheVersionScope,
-	readCacheVersionsFromStore,
-} from "./cache-version-store";
 
 const DEFAULT_LOG_RETENTION_DAYS = 30;
 const DEFAULT_SESSION_TTL_HOURS = 12;
@@ -22,15 +13,6 @@ const DEFAULT_PROXY_STREAM_USAGE_MAX_PARSERS = 0;
 const DEFAULT_PROXY_STREAM_USAGE_PARSE_TIMEOUT_MS = 0;
 const DEFAULT_PROXY_RESPONSES_AFFINITY_TTL_SECONDS = 24 * 60 * 60;
 const DEFAULT_PROXY_STREAM_OPTIONS_CAPABILITY_TTL_SECONDS = 7 * 24 * 60 * 60;
-const DEFAULT_CACHE_ENABLED = true;
-const DEFAULT_CACHE_VERSION = 1;
-const DEFAULT_CACHE_DASHBOARD_TTL_SECONDS = 30;
-const DEFAULT_CACHE_USAGE_TTL_SECONDS = 15;
-const DEFAULT_CACHE_MODELS_TTL_SECONDS = 60;
-const DEFAULT_CACHE_TOKENS_TTL_SECONDS = 15;
-const DEFAULT_CACHE_CHANNELS_TTL_SECONDS = 15;
-const DEFAULT_CACHE_CALL_TOKENS_TTL_SECONDS = 15;
-const DEFAULT_CACHE_SETTINGS_TTL_SECONDS = 30;
 const DEFAULT_PROXY_UPSTREAM_TIMEOUT_MS = 180000;
 const DEFAULT_PROXY_RETRY_MAX_RETRIES = 5;
 const DEFAULT_PROXY_RETRY_SLEEP_MS = 1000;
@@ -49,29 +31,15 @@ const DEFAULT_PROXY_ATTEMPT_WORKER_FALLBACK_THRESHOLD = 3;
 const DEFAULT_PROXY_LARGE_REQUEST_OFFLOAD_THRESHOLD_BYTES = 32768;
 const DEFAULT_ATTEMPT_LOG_ENABLED = true;
 const DEFAULT_ATTEMPT_LOG_RETENTION_DAYS = 30;
-const CACHE_CONFIG_TTL_MS = 0;
 const SETTING_SNAPSHOT_TTL_MS = 1000;
+const RUNTIME_SETTING_SNAPSHOT_TTL_MS = 5000;
+
 const RETENTION_KEY = "log_retention_days";
 const SESSION_TTL_KEY = "session_ttl_hours";
 const ADMIN_PASSWORD_HASH_KEY = "admin_password_hash";
 const CHECKIN_SCHEDULE_TIME_KEY = "checkin_schedule_time";
 const MODEL_FAILURE_COOLDOWN_KEY = "model_failure_cooldown_minutes";
 const MODEL_FAILURE_COOLDOWN_THRESHOLD_KEY = "model_failure_cooldown_threshold";
-const CACHE_ENABLED_KEY = "cache_enabled";
-const CACHE_DASHBOARD_TTL_KEY = "cache_ttl_dashboard_seconds";
-const CACHE_USAGE_TTL_KEY = "cache_ttl_usage_seconds";
-const CACHE_MODELS_TTL_KEY = "cache_ttl_models_seconds";
-const CACHE_TOKENS_TTL_KEY = "cache_ttl_tokens_seconds";
-const CACHE_CHANNELS_TTL_KEY = "cache_ttl_channels_seconds";
-const CACHE_CALL_TOKENS_TTL_KEY = "cache_ttl_call_tokens_seconds";
-const CACHE_SETTINGS_TTL_KEY = "cache_ttl_settings_seconds";
-const CACHE_VERSION_DASHBOARD_KEY = "cache_v_dashboard";
-const CACHE_VERSION_USAGE_KEY = "cache_v_usage";
-const CACHE_VERSION_MODELS_KEY = "cache_v_models";
-const CACHE_VERSION_TOKENS_KEY = "cache_v_tokens";
-const CACHE_VERSION_CHANNELS_KEY = "cache_v_channels";
-const CACHE_VERSION_CALL_TOKENS_KEY = "cache_v_call_tokens";
-const CACHE_VERSION_SETTINGS_KEY = "cache_v_settings";
 const PROXY_UPSTREAM_TIMEOUT_KEY = "proxy_upstream_timeout_ms";
 const PROXY_RETRY_MAX_RETRIES_KEY = "proxy_retry_max_retries";
 const PROXY_RETRY_SLEEP_MS_KEY = "proxy_retry_sleep_ms";
@@ -95,6 +63,28 @@ const PROXY_LARGE_REQUEST_OFFLOAD_THRESHOLD_BYTES_KEY =
 	"proxy_large_request_offload_threshold_bytes";
 const ATTEMPT_LOG_ENABLED_KEY = "attempt_log_enabled";
 const ATTEMPT_LOG_RETENTION_DAYS_KEY = "attempt_log_retention_days";
+
+const RUNTIME_SETTING_KEYS = [
+	PROXY_UPSTREAM_TIMEOUT_KEY,
+	PROXY_RETRY_MAX_RETRIES_KEY,
+	PROXY_RETRY_SLEEP_MS_KEY,
+	PROXY_RETRY_SKIP_ERROR_CODES_KEY,
+	PROXY_RETRY_SLEEP_ERROR_CODES_KEY,
+	PROXY_ZERO_COMPLETION_AS_ERROR_KEY,
+	MODEL_FAILURE_COOLDOWN_KEY,
+	MODEL_FAILURE_COOLDOWN_THRESHOLD_KEY,
+	PROXY_STREAM_USAGE_MODE_KEY,
+	PROXY_STREAM_USAGE_MAX_BYTES_KEY,
+	PROXY_STREAM_USAGE_MAX_PARSERS_KEY,
+	PROXY_STREAM_USAGE_PARSE_TIMEOUT_KEY,
+	PROXY_RESPONSES_AFFINITY_TTL_KEY,
+	PROXY_STREAM_OPTIONS_CAPABILITY_TTL_KEY,
+	PROXY_ATTEMPT_WORKER_FALLBACK_ENABLED_KEY,
+	PROXY_ATTEMPT_WORKER_FALLBACK_THRESHOLD_KEY,
+	PROXY_LARGE_REQUEST_OFFLOAD_THRESHOLD_BYTES_KEY,
+	ATTEMPT_LOG_ENABLED_KEY,
+	ATTEMPT_LOG_RETENTION_DAYS_KEY,
+] as const;
 
 export type RuntimeProxyConfig = {
 	upstream_timeout_ms: number;
@@ -139,73 +129,18 @@ export type ProxyRuntimeSettings = {
 	attempt_log_retention_days: number;
 };
 
-export type CacheConfig = {
-	enabled: boolean;
-	dashboard_ttl_seconds: number;
-	usage_ttl_seconds: number;
-	models_ttl_seconds: number;
-	tokens_ttl_seconds: number;
-	channels_ttl_seconds: number;
-	call_tokens_ttl_seconds: number;
-	settings_ttl_seconds: number;
-	version_dashboard: number;
-	version_usage: number;
-	version_models: number;
-	version_tokens: number;
-	version_channels: number;
-	version_call_tokens: number;
-	version_settings: number;
-};
-
-export type CacheConfigUpdate = {
-	enabled?: boolean;
-	dashboardTtlSeconds?: number;
-	usageTtlSeconds?: number;
-	modelsTtlSeconds?: number;
-	tokensTtlSeconds?: number;
-	channelsTtlSeconds?: number;
-	callTokensTtlSeconds?: number;
-	settingsTtlSeconds?: number;
-};
-
-type CacheConfigSnapshot = {
-	value: CacheConfig;
-	expiresAt: number;
-};
-
-let cacheConfigSnapshot: CacheConfigSnapshot | null = null;
 type SettingSnapshot<T> = {
 	value: T;
 	expiresAt: number;
 };
+
 let retentionSnapshot: SettingSnapshot<number> | null = null;
 let sessionTtlSnapshot: SettingSnapshot<number> | null = null;
 let adminPasswordSnapshot: SettingSnapshot<string | null> | null = null;
 let checkinScheduleSnapshot: SettingSnapshot<string> | null = null;
 let modelCooldownSnapshot: SettingSnapshot<number> | null = null;
-type CacheControlSnapshot<T> = {
-	value: T;
-	expiresAt: number;
-};
-type SettingsCacheControl = {
-	enabled: boolean;
-	ttlSeconds: number;
-	version: number;
-};
-let settingsCacheControlSnapshot: CacheControlSnapshot<SettingsCacheControl> | null =
+let runtimeSettingsSnapshot: SettingSnapshot<ProxyRuntimeSettings> | null =
 	null;
-
-const CACHE_VERSION_KEYS: Record<CacheVersionScope, string> = {
-	dashboard: CACHE_VERSION_DASHBOARD_KEY,
-	usage: CACHE_VERSION_USAGE_KEY,
-	models: CACHE_VERSION_MODELS_KEY,
-	tokens: CACHE_VERSION_TOKENS_KEY,
-	channels: CACHE_VERSION_CHANNELS_KEY,
-	call_tokens: CACHE_VERSION_CALL_TOKENS_KEY,
-	settings: CACHE_VERSION_SETTINGS_KEY,
-};
-
-type CacheVersionRecord = Record<CacheVersionScope, number>;
 
 async function readSetting(
 	db: D1Database,
@@ -216,6 +151,25 @@ async function readSetting(
 		.bind(key)
 		.first<{ value?: string }>();
 	return setting?.value ? String(setting.value) : null;
+}
+
+async function readSettingsByKeys(
+	db: D1Database,
+	keys: readonly string[],
+): Promise<Record<string, string>> {
+	if (keys.length === 0) {
+		return {};
+	}
+	const placeholders = keys.map(() => "?").join(", ");
+	const result = await db
+		.prepare(`SELECT key, value FROM settings WHERE key IN (${placeholders})`)
+		.bind(...keys)
+		.all<{ key: string; value: string }>();
+	const map: Record<string, string> = {};
+	for (const row of result.results ?? []) {
+		map[String(row.key)] = String(row.value);
+	}
+	return map;
 }
 
 async function upsertSetting(
@@ -297,71 +251,9 @@ async function getCachedSetting<T>(
 	return value;
 }
 
-function setCacheConfigSnapshot(value: CacheConfig): void {
-	cacheConfigSnapshot = {
-		value,
-		expiresAt: Date.now() + CACHE_CONFIG_TTL_MS,
-	};
-}
-
-function clearCacheConfigSnapshot(): void {
-	cacheConfigSnapshot = null;
-}
-
-function setSettingsCacheControlSnapshot(value: SettingsCacheControl): void {
-	settingsCacheControlSnapshot = {
-		value,
-		expiresAt: Date.now() + CACHE_CONFIG_TTL_MS,
-	};
-}
-
-function clearSettingsCacheControlSnapshot(): void {
-	settingsCacheControlSnapshot = null;
-}
-
-async function readCacheVersion(
-	db: D1Database,
-	scope: CacheVersionScope,
-): Promise<number> {
-	const key = CACHE_VERSION_KEYS[scope];
-	const value = await readSetting(db, key);
-	return parsePositiveSetting(value, DEFAULT_CACHE_VERSION);
-}
-
-async function bumpCacheVersion(
-	db: D1Database,
-	scope: CacheVersionScope,
-): Promise<void> {
-	const key = CACHE_VERSION_KEYS[scope];
-	await db
-		.prepare(
-			"INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = CAST(settings.value AS INTEGER) + 1, updated_at = excluded.updated_at",
-		)
-		.bind(key, String(DEFAULT_CACHE_VERSION + 1), nowIso())
-		.run();
-}
-
-export async function bumpCacheVersions(
-	db: D1Database,
-	scopes: CacheVersionScope[],
-	cacheVersionStore?: DurableObjectNamespace,
-): Promise<void> {
-	const mergedScopes = Array.from(
-		new Set<CacheVersionScope>([...scopes, "settings"]),
-	);
-	if (mergedScopes.length === 0) {
-		return;
-	}
-	await Promise.all(mergedScopes.map((scope) => bumpCacheVersion(db, scope)));
-	if (cacheVersionStore) {
-		try {
-			await bumpCacheVersionsInStore(cacheVersionStore, mergedScopes);
-		} catch {
-			// ignore cache-version DO failures and fall back to D1 settings values
-		}
-	}
-	clearCacheConfigSnapshot();
-	clearSettingsCacheControlSnapshot();
+function clearRuntimeSnapshots(): void {
+	runtimeSettingsSnapshot = null;
+	modelCooldownSnapshot = null;
 }
 
 function normalizeStreamUsageMode(value: string | undefined): string {
@@ -405,139 +297,104 @@ function parseErrorCodeListSetting(
 	return normalized ?? [...fallback];
 }
 
-async function getSettingsCacheControl(
-	db: D1Database,
-): Promise<SettingsCacheControl> {
-	const snapshot = settingsCacheControlSnapshot;
-	if (snapshot && snapshot.expiresAt > Date.now()) {
-		return snapshot.value;
-	}
-	const enabled = parseBooleanSetting(
-		await readSetting(db, CACHE_ENABLED_KEY),
-		DEFAULT_CACHE_ENABLED,
-	);
-	const ttlSeconds = parseNonNegativeSetting(
-		await readSetting(db, CACHE_SETTINGS_TTL_KEY),
-		DEFAULT_CACHE_SETTINGS_TTL_SECONDS,
-	);
-	const version = await readCacheVersion(db, "settings");
-	const value = { enabled, ttlSeconds, version };
-	setSettingsCacheControlSnapshot(value);
-	return value;
-}
-
-export async function getSettingsSnapshot(
-	db: D1Database,
-): Promise<Record<string, string>> {
-	return listSettings(db);
-}
-
 export async function getProxyRuntimeSettings(
 	db: D1Database,
 ): Promise<ProxyRuntimeSettings> {
-	const settings = await getSettingsSnapshot(db);
-	const upstreamTimeout = parseNonNegativeSetting(
-		settings[PROXY_UPSTREAM_TIMEOUT_KEY] ?? null,
-		DEFAULT_PROXY_UPSTREAM_TIMEOUT_MS,
-	);
-	const retryMaxRetries = parseNonNegativeSetting(
-		settings[PROXY_RETRY_MAX_RETRIES_KEY] ?? null,
-		DEFAULT_PROXY_RETRY_MAX_RETRIES,
-	);
-	const retrySleepMs = parseNonNegativeSetting(
-		settings[PROXY_RETRY_SLEEP_MS_KEY] ?? null,
-		DEFAULT_PROXY_RETRY_SLEEP_MS,
-	);
-	const retrySkipErrorCodes = parseErrorCodeListSetting(
-		settings[PROXY_RETRY_SKIP_ERROR_CODES_KEY] ?? null,
-		DEFAULT_PROXY_RETRY_SKIP_ERROR_CODES,
-	);
-	const retrySleepErrorCodes = parseErrorCodeListSetting(
-		settings[PROXY_RETRY_SLEEP_ERROR_CODES_KEY] ?? null,
-		DEFAULT_PROXY_RETRY_SLEEP_ERROR_CODES,
-	);
-	const zeroCompletionAsErrorEnabled = parseBooleanSetting(
-		settings[PROXY_ZERO_COMPLETION_AS_ERROR_KEY] ?? null,
-		DEFAULT_PROXY_ZERO_COMPLETION_AS_ERROR_ENABLED,
-	);
-	const modelFailureCooldownMinutes = parseNonNegativeSetting(
-		settings[MODEL_FAILURE_COOLDOWN_KEY] ?? null,
-		DEFAULT_MODEL_FAILURE_COOLDOWN_MINUTES,
-	);
-	const modelFailureCooldownThreshold = parsePositiveSetting(
-		settings[MODEL_FAILURE_COOLDOWN_THRESHOLD_KEY] ?? null,
-		DEFAULT_MODEL_FAILURE_COOLDOWN_THRESHOLD,
-	);
-	const streamUsageMode = normalizeStreamUsageMode(
-		settings[PROXY_STREAM_USAGE_MODE_KEY],
-	);
-	const streamUsageMaxBytes = parseNonNegativeSetting(
-		settings[PROXY_STREAM_USAGE_MAX_BYTES_KEY] ?? null,
-		DEFAULT_PROXY_STREAM_USAGE_MAX_BYTES,
-	);
-	const streamUsageMaxParsers = parseNonNegativeSetting(
-		settings[PROXY_STREAM_USAGE_MAX_PARSERS_KEY] ?? null,
-		DEFAULT_PROXY_STREAM_USAGE_MAX_PARSERS,
-	);
-	const streamUsageParseTimeout = parseNonNegativeSetting(
-		settings[PROXY_STREAM_USAGE_PARSE_TIMEOUT_KEY] ?? null,
-		DEFAULT_PROXY_STREAM_USAGE_PARSE_TIMEOUT_MS,
-	);
-	const responsesAffinityTtlSeconds = parsePositiveSetting(
-		settings[PROXY_RESPONSES_AFFINITY_TTL_KEY] ?? null,
-		DEFAULT_PROXY_RESPONSES_AFFINITY_TTL_SECONDS,
-	);
-	const streamOptionsCapabilityTtlSeconds = parsePositiveSetting(
-		settings[PROXY_STREAM_OPTIONS_CAPABILITY_TTL_KEY] ?? null,
-		DEFAULT_PROXY_STREAM_OPTIONS_CAPABILITY_TTL_SECONDS,
-	);
-	const attemptWorkerFallbackEnabled = parseBooleanSetting(
-		settings[PROXY_ATTEMPT_WORKER_FALLBACK_ENABLED_KEY] ?? null,
-		DEFAULT_PROXY_ATTEMPT_WORKER_FALLBACK_ENABLED,
-	);
-	const attemptWorkerFallbackThreshold = parsePositiveSetting(
-		settings[PROXY_ATTEMPT_WORKER_FALLBACK_THRESHOLD_KEY] ?? null,
-		DEFAULT_PROXY_ATTEMPT_WORKER_FALLBACK_THRESHOLD,
-	);
-	const largeRequestOffloadThresholdBytes = parseNonNegativeSetting(
-		settings[PROXY_LARGE_REQUEST_OFFLOAD_THRESHOLD_BYTES_KEY] ?? null,
-		DEFAULT_PROXY_LARGE_REQUEST_OFFLOAD_THRESHOLD_BYTES,
-	);
-	const attemptLogEnabled = parseBooleanSetting(
-		settings[ATTEMPT_LOG_ENABLED_KEY] ?? null,
-		DEFAULT_ATTEMPT_LOG_ENABLED,
-	);
-	const attemptLogRetentionDays = parsePositiveSetting(
-		settings[ATTEMPT_LOG_RETENTION_DAYS_KEY] ?? null,
-		DEFAULT_ATTEMPT_LOG_RETENTION_DAYS,
-	);
-	return {
-		upstream_timeout_ms: upstreamTimeout,
-		retry_max_retries: retryMaxRetries,
-		retry_sleep_ms: retrySleepMs,
-		retry_skip_error_codes: retrySkipErrorCodes,
-		retry_sleep_error_codes: retrySleepErrorCodes,
-		zero_completion_as_error_enabled: zeroCompletionAsErrorEnabled,
-		model_failure_cooldown_minutes: modelFailureCooldownMinutes,
-		model_failure_cooldown_threshold: modelFailureCooldownThreshold,
-		stream_usage_mode: streamUsageMode,
-		stream_usage_max_bytes: streamUsageMaxBytes,
-		stream_usage_max_parsers: streamUsageMaxParsers,
-		stream_usage_parse_timeout_ms: streamUsageParseTimeout,
-		responses_affinity_ttl_seconds: responsesAffinityTtlSeconds,
-		stream_options_capability_ttl_seconds: streamOptionsCapabilityTtlSeconds,
-		attempt_worker_fallback_enabled: attemptWorkerFallbackEnabled,
-		attempt_worker_fallback_threshold: attemptWorkerFallbackThreshold,
-		large_request_offload_threshold_bytes: largeRequestOffloadThresholdBytes,
-		attempt_log_enabled: attemptLogEnabled,
-		attempt_log_retention_days: attemptLogRetentionDays,
+	const snapshot = runtimeSettingsSnapshot;
+	if (snapshot && snapshot.expiresAt > Date.now()) {
+		return snapshot.value;
+	}
+
+	const settings = await readSettingsByKeys(db, RUNTIME_SETTING_KEYS);
+	const value: ProxyRuntimeSettings = {
+		upstream_timeout_ms: parseNonNegativeSetting(
+			settings[PROXY_UPSTREAM_TIMEOUT_KEY] ?? null,
+			DEFAULT_PROXY_UPSTREAM_TIMEOUT_MS,
+		),
+		retry_max_retries: parseNonNegativeSetting(
+			settings[PROXY_RETRY_MAX_RETRIES_KEY] ?? null,
+			DEFAULT_PROXY_RETRY_MAX_RETRIES,
+		),
+		retry_sleep_ms: parseNonNegativeSetting(
+			settings[PROXY_RETRY_SLEEP_MS_KEY] ?? null,
+			DEFAULT_PROXY_RETRY_SLEEP_MS,
+		),
+		retry_skip_error_codes: parseErrorCodeListSetting(
+			settings[PROXY_RETRY_SKIP_ERROR_CODES_KEY] ?? null,
+			DEFAULT_PROXY_RETRY_SKIP_ERROR_CODES,
+		),
+		retry_sleep_error_codes: parseErrorCodeListSetting(
+			settings[PROXY_RETRY_SLEEP_ERROR_CODES_KEY] ?? null,
+			DEFAULT_PROXY_RETRY_SLEEP_ERROR_CODES,
+		),
+		zero_completion_as_error_enabled: parseBooleanSetting(
+			settings[PROXY_ZERO_COMPLETION_AS_ERROR_KEY] ?? null,
+			DEFAULT_PROXY_ZERO_COMPLETION_AS_ERROR_ENABLED,
+		),
+		model_failure_cooldown_minutes: parseNonNegativeSetting(
+			settings[MODEL_FAILURE_COOLDOWN_KEY] ?? null,
+			DEFAULT_MODEL_FAILURE_COOLDOWN_MINUTES,
+		),
+		model_failure_cooldown_threshold: parsePositiveSetting(
+			settings[MODEL_FAILURE_COOLDOWN_THRESHOLD_KEY] ?? null,
+			DEFAULT_MODEL_FAILURE_COOLDOWN_THRESHOLD,
+		),
+		stream_usage_mode: normalizeStreamUsageMode(
+			settings[PROXY_STREAM_USAGE_MODE_KEY],
+		),
+		stream_usage_max_bytes: parseNonNegativeSetting(
+			settings[PROXY_STREAM_USAGE_MAX_BYTES_KEY] ?? null,
+			DEFAULT_PROXY_STREAM_USAGE_MAX_BYTES,
+		),
+		stream_usage_max_parsers: parseNonNegativeSetting(
+			settings[PROXY_STREAM_USAGE_MAX_PARSERS_KEY] ?? null,
+			DEFAULT_PROXY_STREAM_USAGE_MAX_PARSERS,
+		),
+		stream_usage_parse_timeout_ms: parseNonNegativeSetting(
+			settings[PROXY_STREAM_USAGE_PARSE_TIMEOUT_KEY] ?? null,
+			DEFAULT_PROXY_STREAM_USAGE_PARSE_TIMEOUT_MS,
+		),
+		responses_affinity_ttl_seconds: parsePositiveSetting(
+			settings[PROXY_RESPONSES_AFFINITY_TTL_KEY] ?? null,
+			DEFAULT_PROXY_RESPONSES_AFFINITY_TTL_SECONDS,
+		),
+		stream_options_capability_ttl_seconds: parsePositiveSetting(
+			settings[PROXY_STREAM_OPTIONS_CAPABILITY_TTL_KEY] ?? null,
+			DEFAULT_PROXY_STREAM_OPTIONS_CAPABILITY_TTL_SECONDS,
+		),
+		attempt_worker_fallback_enabled: parseBooleanSetting(
+			settings[PROXY_ATTEMPT_WORKER_FALLBACK_ENABLED_KEY] ?? null,
+			DEFAULT_PROXY_ATTEMPT_WORKER_FALLBACK_ENABLED,
+		),
+		attempt_worker_fallback_threshold: parsePositiveSetting(
+			settings[PROXY_ATTEMPT_WORKER_FALLBACK_THRESHOLD_KEY] ?? null,
+			DEFAULT_PROXY_ATTEMPT_WORKER_FALLBACK_THRESHOLD,
+		),
+		large_request_offload_threshold_bytes: parseNonNegativeSetting(
+			settings[PROXY_LARGE_REQUEST_OFFLOAD_THRESHOLD_BYTES_KEY] ?? null,
+			DEFAULT_PROXY_LARGE_REQUEST_OFFLOAD_THRESHOLD_BYTES,
+		),
+		attempt_log_enabled: parseBooleanSetting(
+			settings[ATTEMPT_LOG_ENABLED_KEY] ?? null,
+			DEFAULT_ATTEMPT_LOG_ENABLED,
+		),
+		attempt_log_retention_days: parsePositiveSetting(
+			settings[ATTEMPT_LOG_RETENTION_DAYS_KEY] ?? null,
+			DEFAULT_ATTEMPT_LOG_RETENTION_DAYS,
+		),
 	};
+	runtimeSettingsSnapshot = {
+		value,
+		expiresAt: Date.now() + RUNTIME_SETTING_SNAPSHOT_TTL_MS,
+	};
+	return value;
 }
 
 /**
  * Returns runtime proxy configuration derived from settings and environment.
  *
  * @param env - Worker bindings.
+ * @param settings - Runtime settings snapshot.
  * @returns Runtime proxy configuration for display.
  */
 export function getRuntimeProxyConfig(
@@ -556,7 +413,6 @@ export function getRuntimeProxyConfig(
 export async function setProxyRuntimeSettings(
 	db: D1Database,
 	update: Partial<ProxyRuntimeSettings>,
-	cacheVersionStore?: DurableObjectNamespace,
 ): Promise<void> {
 	const tasks: Promise<void>[] = [];
 	if (update.upstream_timeout_ms !== undefined) {
@@ -738,211 +594,7 @@ export async function setProxyRuntimeSettings(
 		return;
 	}
 	await Promise.all(tasks);
-	await bumpCacheVersions(db, ["settings"], cacheVersionStore);
-}
-
-function parseCacheVersionsFromSettings(
-	settings: Record<string, string>,
-): CacheVersionRecord {
-	return {
-		dashboard: parsePositiveSetting(
-			settings[CACHE_VERSION_DASHBOARD_KEY] ?? null,
-			DEFAULT_CACHE_VERSION,
-		),
-		usage: parsePositiveSetting(
-			settings[CACHE_VERSION_USAGE_KEY] ?? null,
-			DEFAULT_CACHE_VERSION,
-		),
-		models: parsePositiveSetting(
-			settings[CACHE_VERSION_MODELS_KEY] ?? null,
-			DEFAULT_CACHE_VERSION,
-		),
-		tokens: parsePositiveSetting(
-			settings[CACHE_VERSION_TOKENS_KEY] ?? null,
-			DEFAULT_CACHE_VERSION,
-		),
-		channels: parsePositiveSetting(
-			settings[CACHE_VERSION_CHANNELS_KEY] ?? null,
-			DEFAULT_CACHE_VERSION,
-		),
-		call_tokens: parsePositiveSetting(
-			settings[CACHE_VERSION_CALL_TOKENS_KEY] ?? null,
-			DEFAULT_CACHE_VERSION,
-		),
-		settings: parsePositiveSetting(
-			settings[CACHE_VERSION_SETTINGS_KEY] ?? null,
-			DEFAULT_CACHE_VERSION,
-		),
-	};
-}
-
-export async function getCacheConfig(
-	db: D1Database,
-	cacheVersionStore?: DurableObjectNamespace,
-): Promise<CacheConfig> {
-	const snapshot = cacheConfigSnapshot;
-	if (snapshot && snapshot.expiresAt > Date.now()) {
-		return snapshot.value;
-	}
-	const settings = await getSettingsSnapshot(db);
-	const enabled = parseBooleanSetting(
-		settings[CACHE_ENABLED_KEY] ?? null,
-		DEFAULT_CACHE_ENABLED,
-	);
-	const dashboardTtl = parseNonNegativeSetting(
-		settings[CACHE_DASHBOARD_TTL_KEY] ?? null,
-		DEFAULT_CACHE_DASHBOARD_TTL_SECONDS,
-	);
-	const usageTtl = parseNonNegativeSetting(
-		settings[CACHE_USAGE_TTL_KEY] ?? null,
-		DEFAULT_CACHE_USAGE_TTL_SECONDS,
-	);
-	const modelsTtl = parseNonNegativeSetting(
-		settings[CACHE_MODELS_TTL_KEY] ?? null,
-		DEFAULT_CACHE_MODELS_TTL_SECONDS,
-	);
-	const tokensTtl = parseNonNegativeSetting(
-		settings[CACHE_TOKENS_TTL_KEY] ?? null,
-		DEFAULT_CACHE_TOKENS_TTL_SECONDS,
-	);
-	const channelsTtl = parseNonNegativeSetting(
-		settings[CACHE_CHANNELS_TTL_KEY] ?? null,
-		DEFAULT_CACHE_CHANNELS_TTL_SECONDS,
-	);
-	const callTokensTtl = parseNonNegativeSetting(
-		settings[CACHE_CALL_TOKENS_TTL_KEY] ?? null,
-		DEFAULT_CACHE_CALL_TOKENS_TTL_SECONDS,
-	);
-	const settingsTtl = parseNonNegativeSetting(
-		settings[CACHE_SETTINGS_TTL_KEY] ?? null,
-		DEFAULT_CACHE_SETTINGS_TTL_SECONDS,
-	);
-	const fallbackVersions = parseCacheVersionsFromSettings(settings);
-	let versions = fallbackVersions;
-	if (cacheVersionStore) {
-		try {
-			versions = await readCacheVersionsFromStore(
-				cacheVersionStore,
-				[...ALL_CACHE_VERSION_SCOPES],
-				fallbackVersions,
-			);
-		} catch {
-			// ignore cache-version DO failures and fall back to D1 settings values
-		}
-	}
-	const value = {
-		enabled,
-		dashboard_ttl_seconds: dashboardTtl,
-		usage_ttl_seconds: usageTtl,
-		models_ttl_seconds: modelsTtl,
-		tokens_ttl_seconds: tokensTtl,
-		channels_ttl_seconds: channelsTtl,
-		call_tokens_ttl_seconds: callTokensTtl,
-		settings_ttl_seconds: settingsTtl,
-		version_dashboard: versions.dashboard,
-		version_usage: versions.usage,
-		version_models: versions.models,
-		version_tokens: versions.tokens,
-		version_channels: versions.channels,
-		version_call_tokens: versions.call_tokens,
-		version_settings: versions.settings,
-	};
-	setCacheConfigSnapshot(value);
-	return value;
-}
-
-export async function setCacheConfig(
-	db: D1Database,
-	update: CacheConfigUpdate,
-	cacheVersionStore?: DurableObjectNamespace,
-): Promise<CacheConfig> {
-	const tasks: Promise<void>[] = [];
-	if (update.enabled !== undefined) {
-		tasks.push(
-			upsertSetting(db, CACHE_ENABLED_KEY, update.enabled ? "1" : "0"),
-		);
-	}
-	if (update.dashboardTtlSeconds !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				CACHE_DASHBOARD_TTL_KEY,
-				String(Math.max(0, Math.floor(update.dashboardTtlSeconds))),
-			),
-		);
-	}
-	if (update.usageTtlSeconds !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				CACHE_USAGE_TTL_KEY,
-				String(Math.max(0, Math.floor(update.usageTtlSeconds))),
-			),
-		);
-	}
-	if (update.modelsTtlSeconds !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				CACHE_MODELS_TTL_KEY,
-				String(Math.max(0, Math.floor(update.modelsTtlSeconds))),
-			),
-		);
-	}
-	if (update.tokensTtlSeconds !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				CACHE_TOKENS_TTL_KEY,
-				String(Math.max(0, Math.floor(update.tokensTtlSeconds))),
-			),
-		);
-	}
-	if (update.channelsTtlSeconds !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				CACHE_CHANNELS_TTL_KEY,
-				String(Math.max(0, Math.floor(update.channelsTtlSeconds))),
-			),
-		);
-	}
-	if (update.callTokensTtlSeconds !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				CACHE_CALL_TOKENS_TTL_KEY,
-				String(Math.max(0, Math.floor(update.callTokensTtlSeconds))),
-			),
-		);
-	}
-	if (update.settingsTtlSeconds !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				CACHE_SETTINGS_TTL_KEY,
-				String(Math.max(0, Math.floor(update.settingsTtlSeconds))),
-			),
-		);
-	}
-	if (tasks.length === 0) {
-		return getCacheConfig(db, cacheVersionStore);
-	}
-	await Promise.all(tasks);
-	await bumpCacheVersions(
-		db,
-		[
-			"dashboard",
-			"usage",
-			"models",
-			"tokens",
-			"channels",
-			"call_tokens",
-			"settings",
-		],
-		cacheVersionStore,
-	);
-	return getCacheConfig(db, cacheVersionStore);
+	clearRuntimeSnapshots();
 }
 
 /**
@@ -1093,20 +745,7 @@ export async function setModelFailureCooldownMinutes(
 	const value = Math.max(0, Math.floor(minutes)).toString();
 	await upsertSetting(db, MODEL_FAILURE_COOLDOWN_KEY, value);
 	modelCooldownSnapshot = null;
-}
-
-/**
- * Loads generic settings as a key/value map.
- */
-export async function listSettings(
-	db: D1Database,
-): Promise<Record<string, string>> {
-	const result = await db.prepare("SELECT key, value FROM settings").all();
-	const map: Record<string, string> = {};
-	for (const row of result.results ?? []) {
-		map[String(row.key)] = String(row.value);
-	}
-	return map;
+	clearRuntimeSnapshots();
 }
 
 /**
@@ -1118,6 +757,5 @@ export function resetSettingsSnapshots(): void {
 	adminPasswordSnapshot = null;
 	checkinScheduleSnapshot = null;
 	modelCooldownSnapshot = null;
-	cacheConfigSnapshot = null;
-	settingsCacheControlSnapshot = null;
+	runtimeSettingsSnapshot = null;
 }

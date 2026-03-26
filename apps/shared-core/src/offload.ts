@@ -13,7 +13,10 @@ export type OffloadDecision = {
 export function resolveLargeRequestOffload(
 	input: OffloadDecisionInput,
 ): OffloadDecision {
-	const thresholdBytes = Math.max(0, Math.floor(Number(input.thresholdBytes || 0)));
+	const thresholdBytes = Math.max(
+		0,
+		Math.floor(Number(input.thresholdBytes || 0)),
+	);
 	// threshold <= 0 means offload is disabled.
 	const offloadEnabled = thresholdBytes > 0;
 	const contentLengthHeader = input.contentLengthHeader?.trim() ?? "";

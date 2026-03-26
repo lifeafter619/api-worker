@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { AppEnv } from "./env";
 import { adminAuth } from "./middleware/adminAuth";
+import attemptEventsRoutes from "./routes/attempt-events";
 import authRoutes from "./routes/auth";
 import channelRoutes from "./routes/channels";
 import dashboardRoutes from "./routes/dashboard";
@@ -9,16 +10,13 @@ import modelRoutes from "./routes/models";
 import newapiChannelRoutes from "./routes/newapiChannels";
 import newapiGroupRoutes from "./routes/newapiGroups";
 import newapiUserRoutes from "./routes/newapiUsers";
-import attemptEventsRoutes from "./routes/attempt-events";
 import proxyForwardRoutes from "./routes/proxy-forward";
 import settingsRoutes from "./routes/settings";
 import siteRoutes from "./routes/sites";
 import tokenRoutes from "./routes/tokens";
 import usageRoutes from "./routes/usage";
-import { warmupWasmCore } from "./wasm/core";
 
 const app = new Hono<AppEnv>({ strict: false });
-warmupWasmCore();
 app.use(
 	"/api/*",
 	cors({
@@ -138,5 +136,4 @@ export default {
 	fetch: app.fetch,
 };
 
-export { CacheVersionStore } from "./services/cache-version-store";
 export { CheckinScheduler } from "./services/checkin-scheduler";

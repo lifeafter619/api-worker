@@ -2,8 +2,11 @@ import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { listModelEntriesWithFallback } from "../services/channel-model-capabilities";
 import { listActiveChannels } from "../services/channel-repo";
-import { buildModelsIndexKey, readHotJson, writeHotJson } from "../services/hot-kv";
-import { getCacheConfig } from "../services/settings";
+import {
+	buildModelsIndexKey,
+	readHotJson,
+	writeHotJson,
+} from "../services/hot-kv";
 
 const models = new Hono<AppEnv>();
 
@@ -12,10 +15,12 @@ const models = new Hono<AppEnv>();
  */
 models.get("/", async (c) => {
 	const db = c.env.DB;
-	const cacheConfig = await getCacheConfig(db, c.env.CACHE_VERSION_STORE);
-	const cacheKey = buildModelsIndexKey(cacheConfig.version_models);
+	const cacheKey = buildModelsIndexKey();
 	const cached = await readHotJson<{
-		models: Array<{ id: string; channels: Array<{ id: string; name: string }> }>;
+		models: Array<{
+			id: string;
+			channels: Array<{ id: string; name: string }>;
+		}>;
 	}>(c.env.KV_HOT, cacheKey);
 	if (cached && Array.isArray(cached.models)) {
 		return c.json(cached);

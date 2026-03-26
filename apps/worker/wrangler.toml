@@ -31,10 +31,6 @@ run_worker_first = true
 name = "CHECKIN_SCHEDULER"
 class_name = "CheckinScheduler"
 
-[[durable_objects.bindings]]
-name = "CACHE_VERSION_STORE"
-class_name = "CacheVersionStore"
-
 [[services]]
 binding = "ATTEMPT_WORKER"
 service = "attempt-worker"
@@ -54,5 +50,9 @@ new_sqlite_classes = ["CacheVersionStore"]
 [[migrations]]
 tag = "v4"
 deleted_classes = ["UsageLimiter"]
+
+[[migrations]]
+tag = "v5"
+deleted_classes = ["CacheVersionStore"]
 
 

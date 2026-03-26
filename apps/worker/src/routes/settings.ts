@@ -6,12 +6,12 @@ import {
 } from "../services/checkin-scheduler";
 import {
 	getCheckinScheduleTime,
-	normalizeErrorCodeList,
 	getProxyRuntimeSettings,
 	getRetentionDays,
 	getRuntimeProxyConfig,
 	getSessionTtlHours,
 	isAdminPasswordSet,
+	normalizeErrorCodeList,
 	setAdminPasswordHash,
 	setCheckinScheduleTime,
 	setProxyRuntimeSettings,
@@ -161,7 +161,9 @@ settings.put("/", async (c) => {
 	}
 
 	if (body.proxy_retry_skip_error_codes !== undefined) {
-		const normalized = normalizeErrorCodeList(body.proxy_retry_skip_error_codes);
+		const normalized = normalizeErrorCodeList(
+			body.proxy_retry_skip_error_codes,
+		);
 		if (!normalized) {
 			return jsonError(
 				c,
@@ -175,7 +177,9 @@ settings.put("/", async (c) => {
 	}
 
 	if (body.proxy_retry_sleep_error_codes !== undefined) {
-		const normalized = normalizeErrorCodeList(body.proxy_retry_sleep_error_codes);
+		const normalized = normalizeErrorCodeList(
+			body.proxy_retry_sleep_error_codes,
+		);
 		if (!normalized) {
 			return jsonError(
 				c,
@@ -485,7 +489,7 @@ settings.put("/", async (c) => {
 	}
 
 	if (runtimeTouched) {
-		await setProxyRuntimeSettings(db, runtimePatch, c.env.CACHE_VERSION_STORE);
+		await setProxyRuntimeSettings(db, runtimePatch);
 		touched = true;
 	}
 

@@ -1,40 +1,35 @@
 import type { KVNamespace } from "@cloudflare/workers-types";
 
 const HOT_PREFIX = "hot";
+const ACTIVE_CHANNELS_KEY = `${HOT_PREFIX}:active_channels`;
+const MODELS_INDEX_KEY = `${HOT_PREFIX}:models_index`;
+const CALL_TOKENS_INDEX_KEY = `${HOT_PREFIX}:call_tokens_index`;
 
-function buildVersionKey(parts: Array<string | number>): string {
+function buildKey(parts: Array<string | number>): string {
 	return parts.map((part) => String(part)).join(":");
 }
 
-export function buildActiveChannelsKey(versionChannels: number): string {
-	return `${HOT_PREFIX}:active_channels:${buildVersionKey(["v", versionChannels])}`;
+export function buildActiveChannelsKey(): string {
+	return ACTIVE_CHANNELS_KEY;
 }
 
-export function buildModelsIndexKey(versionModels: number): string {
-	return `${HOT_PREFIX}:models_index:${buildVersionKey(["v", versionModels])}`;
+export function buildModelsIndexKey(): string {
+	return MODELS_INDEX_KEY;
 }
 
-export function buildCallTokensIndexKey(
-	versionCallTokens: number,
-	versionChannels: number,
-): string {
-	return `${HOT_PREFIX}:call_tokens_index:${buildVersionKey([
-		"v",
-		versionCallTokens,
-		"cv",
-		versionChannels,
-	])}`;
+export function buildCallTokensIndexKey(): string {
+	return CALL_TOKENS_INDEX_KEY;
 }
 
 export function buildResponsesAffinityKey(responseId: string): string {
-	return `${HOT_PREFIX}:responses_affinity:${buildVersionKey([
+	return `${HOT_PREFIX}:responses_affinity:${buildKey([
 		"id",
 		responseId.trim(),
 	])}`;
 }
 
 export function buildStreamOptionsCapabilityKey(channelId: string): string {
-	return `${HOT_PREFIX}:stream_options_capability:${buildVersionKey([
+	return `${HOT_PREFIX}:stream_options_capability:${buildKey([
 		"channel",
 		channelId.trim(),
 	])}`;
@@ -72,4 +67,28 @@ export async function writeHotJson<T>(
 	} catch {
 		// ignore KV failures and fall back to D1
 	}
+}
+
+export async function deleteHotKey(
+	kv: KVNamespace | undefined,
+	key: string,
+): Promise<void> {
+	if (!kv) {
+		return;
+	}
+	try {
+		await kv.delete(key);
+	} catch {
+		// ignore KV failures and fall back to D1
+	}
+}
+
+export async function invalidateSelectionHotCache(
+	kv: KVNamespace | undefined,
+): Promise<void> {
+	await Promise.all([
+		deleteHotKey(kv, buildActiveChannelsKey()),
+		deleteHotKey(kv, buildModelsIndexKey()),
+		deleteHotKey(kv, buildCallTokensIndexKey()),
+	]);
 }

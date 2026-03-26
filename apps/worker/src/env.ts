@@ -10,7 +10,6 @@ export type Bindings = {
 	KV_HOT?: KVNamespace;
 	ATTEMPT_WORKER?: Fetcher;
 	CORS_ORIGIN?: string;
-	CACHE_VERSION_STORE?: DurableObjectNamespace;
 	CHECKIN_SCHEDULER: DurableObjectNamespace;
 };
 

@@ -94,7 +94,10 @@ const formatChannelLabel = (log: UsageLog): string => {
 	) {
 		return "聚合结果";
 	}
-	if (log.failure_stage === "request" || log.failure_stage === "request_validation") {
+	if (
+		log.failure_stage === "request" ||
+		log.failure_stage === "request_validation"
+	) {
 		return "请求级";
 	}
 	return "-";
@@ -660,15 +663,21 @@ export const UsageView = ({
 									<span>{formatSeconds(activeErrorLog.latency_ms)}</span>
 								</div>
 								<div class="flex items-center justify-between gap-3">
-									<span class="text-[color:var(--app-ink-muted)]">异常阶段</span>
+									<span class="text-[color:var(--app-ink-muted)]">
+										异常阶段
+									</span>
 									<span>{activeErrorLog.failure_stage ?? "-"}</span>
 								</div>
 								<div class="flex items-center justify-between gap-3">
-									<span class="text-[color:var(--app-ink-muted)]">失败原因</span>
+									<span class="text-[color:var(--app-ink-muted)]">
+										失败原因
+									</span>
 									<span>{activeErrorLog.failure_reason ?? "-"}</span>
 								</div>
 								<div class="flex items-center justify-between gap-3">
-									<span class="text-[color:var(--app-ink-muted)]">Usage 来源</span>
+									<span class="text-[color:var(--app-ink-muted)]">
+										Usage 来源
+									</span>
 									<span>{activeErrorLog.usage_source ?? "-"}</span>
 								</div>
 							</div>

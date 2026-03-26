@@ -22,11 +22,6 @@ binding = "KV_HOT"
 id = "00000000000000000000000000000000"
 
 [[durable_objects.bindings]]
-name = "CACHE_VERSION_STORE"
-class_name = "CacheVersionStore"
-script_name = "api-worker"
-
-[[durable_objects.bindings]]
 name = "CHECKIN_SCHEDULER"
 class_name = "CheckinScheduler"
 script_name = "api-worker"

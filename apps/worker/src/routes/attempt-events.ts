@@ -25,4 +25,3 @@ attemptEvents.get("/", async (c) => {
 });
 
 export default attemptEvents;
-

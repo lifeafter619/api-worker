@@ -110,7 +110,9 @@ export function hasChatToolOutputHint(
 	return false;
 }
 
-function hasAssistantToolCallHint(body: Record<string, unknown> | null): boolean {
+function hasAssistantToolCallHint(
+	body: Record<string, unknown> | null,
+): boolean {
 	if (!body || !Array.isArray(body.messages)) {
 		return false;
 	}
@@ -148,7 +150,9 @@ function emptyToolCallChainRepairReport(): ToolCallChainRepairReport {
 	};
 }
 
-function collectAssistantToolCallIds(message: Record<string, unknown>): string[] {
+function collectAssistantToolCallIds(
+	message: Record<string, unknown>,
+): string[] {
 	const ids: string[] = [];
 	const toolCalls = Array.isArray(message.tool_calls)
 		? message.tool_calls
@@ -173,10 +177,10 @@ function collectAssistantToolCallIds(message: Record<string, unknown>): string[]
 		!Array.isArray(message.function_call)
 			? (message.function_call as Record<string, unknown>)
 			: message.functionCall &&
-						typeof message.functionCall === "object" &&
-						!Array.isArray(message.functionCall)
-					? (message.functionCall as Record<string, unknown>)
-					: null;
+					typeof message.functionCall === "object" &&
+					!Array.isArray(message.functionCall)
+				? (message.functionCall as Record<string, unknown>)
+				: null;
 	if (functionCall) {
 		const id = normalizeStringField(
 			functionCall.id ?? functionCall.call_id ?? functionCall.callId,
@@ -208,7 +212,9 @@ function patchNearestAssistantCallId(
 				return false;
 			}
 			const record = call as Record<string, unknown>;
-			return !normalizeStringField(record.id ?? record.call_id ?? record.callId);
+			return !normalizeStringField(
+				record.id ?? record.call_id ?? record.callId,
+			);
 		});
 		if (missingCalls.length === 1) {
 			const missingRecord = missingCalls[0] as Record<string, unknown>;
@@ -316,7 +322,9 @@ function repairOpenAiResponsesToolCallChain(
 		const item = rawItem as Record<string, unknown>;
 		const itemType = normalizeStringField(item.type)?.toLowerCase();
 		if (itemType === "function_call") {
-			const callId = normalizeStringField(item.call_id ?? item.callId ?? item.id);
+			const callId = normalizeStringField(
+				item.call_id ?? item.callId ?? item.id,
+			);
 			if (callId) {
 				seenFunctionCallIds.add(callId);
 			} else {
@@ -588,7 +596,10 @@ export function validateOpenAiToolCallChain(
 		return null;
 	}
 	if (endpointType === "responses") {
-		const responsesChatIssue = validateOpenAiResponsesChatMessageChain(body, hints);
+		const responsesChatIssue = validateOpenAiResponsesChatMessageChain(
+			body,
+			hints,
+		);
 		if (responsesChatIssue) {
 			return responsesChatIssue;
 		}

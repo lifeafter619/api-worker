@@ -1,9 +1,9 @@
 import type { D1Database } from "@cloudflare/workers-types";
+import { type AttemptLogInput, insertAttemptEvent } from "./attempt-events";
 import {
 	recordChannelModelError,
 	upsertChannelModelCapabilities,
 } from "./channel-model-capabilities";
-import { insertAttemptEvent, type AttemptLogInput } from "./attempt-events";
 import type { UsageInput } from "./usage";
 import { recordUsage } from "./usage";
 
