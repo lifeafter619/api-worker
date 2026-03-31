@@ -20,13 +20,23 @@ type ChannelModelCooldownState = {
 type RecordModelErrorOptions = {
 	cooldownSeconds: number;
 	cooldownFailureThreshold: number;
-	cooldownDisableThreshold: number;
 };
 
 export type RecordModelErrorResult = {
 	cooldownEntered: boolean;
 	cooldownCount: number;
 	channelDisabled: boolean;
+};
+
+type RecordChannelDisableOptions = {
+	disableDurationSeconds: number;
+	disableThreshold: number;
+};
+
+export type RecordChannelDisableResult = {
+	channelTempDisabled: boolean;
+	channelPermanentlyDisabled: boolean;
+	hitCount: number;
 };
 
 function toSafeInt(value: unknown): number {
@@ -210,10 +220,6 @@ export async function recordChannelModelError(
 		1,
 		Math.floor(options.cooldownFailureThreshold),
 	);
-	const cooldownDisableThreshold = Math.max(
-		1,
-		Math.floor(options.cooldownDisableThreshold),
-	);
 	const timestamp = nowIso();
 	const row = await db
 		.prepare(
@@ -284,20 +290,84 @@ export async function recordChannelModelError(
 			)
 			.run();
 	}
-	let channelDisabled = false;
-	if (cooldownEntered && nextCooldownCount >= cooldownDisableThreshold) {
-		const disableResult = await db
-			.prepare(
-				"UPDATE channels SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
-			)
-			.bind("disabled", timestamp, channelId, "active")
-			.run();
-		channelDisabled = Number(disableResult.meta?.changes ?? 0) > 0;
-	}
 	return {
 		cooldownEntered,
 		cooldownCount: nextCooldownCount,
-		channelDisabled,
+		channelDisabled: false,
+	};
+}
+
+export async function recordChannelDisableHit(
+	db: D1Database,
+	channelId: string,
+	errorCode: string,
+	options: RecordChannelDisableOptions,
+	nowSeconds: number = Math.floor(Date.now() / 1000),
+): Promise<RecordChannelDisableResult> {
+	const disableDurationSeconds = Math.max(
+		0,
+		Math.floor(options.disableDurationSeconds),
+	);
+	const disableThreshold = Math.max(1, Math.floor(options.disableThreshold));
+	const timestamp = nowIso();
+	const row = await db
+		.prepare(
+			"SELECT status, auto_disable_hit_count, auto_disabled_permanent FROM channels WHERE id = ?",
+		)
+		.bind(channelId)
+		.first<{
+			status: string | null;
+			auto_disable_hit_count: number | null;
+			auto_disabled_permanent: number | null;
+		}>();
+	const status = String(row?.status ?? "");
+	const currentHitCount = toSafeInt(row?.auto_disable_hit_count);
+	const alreadyPermanentlyDisabled =
+		toSafeInt(row?.auto_disabled_permanent) > 0 || status === "disabled";
+	if (alreadyPermanentlyDisabled) {
+		return {
+			channelTempDisabled: false,
+			channelPermanentlyDisabled: true,
+			hitCount: currentHitCount,
+		};
+	}
+
+	const nextHitCount = currentHitCount + 1;
+	if (nextHitCount >= disableThreshold) {
+		const disableResult = await db
+			.prepare(
+				"UPDATE channels SET status = ?, auto_disable_hit_count = ?, auto_disabled_until = NULL, auto_disabled_reason_code = ?, auto_disabled_permanent = 1, updated_at = ? WHERE id = ? AND status = ?",
+			)
+			.bind("disabled", nextHitCount, errorCode, timestamp, channelId, "active")
+			.run();
+		return {
+			channelTempDisabled: false,
+			channelPermanentlyDisabled: Number(disableResult.meta?.changes ?? 0) > 0,
+			hitCount: nextHitCount,
+		};
+	}
+
+	const disabledUntil =
+		disableDurationSeconds > 0 ? nowSeconds + disableDurationSeconds : null;
+	const tempDisableResult = await db
+		.prepare(
+			"UPDATE channels SET auto_disable_hit_count = ?, auto_disabled_until = ?, auto_disabled_reason_code = ?, auto_disabled_permanent = 0, updated_at = ? WHERE id = ? AND status = ?",
+		)
+		.bind(
+			nextHitCount,
+			disabledUntil,
+			errorCode,
+			timestamp,
+			channelId,
+			"active",
+		)
+		.run();
+	return {
+		channelTempDisabled:
+			Number(tempDisableResult.meta?.changes ?? 0) > 0 &&
+			disabledUntil !== null,
+		channelPermanentlyDisabled: false,
+		hitCount: nextHitCount,
 	};
 }
 
@@ -318,4 +388,10 @@ export async function upsertChannelModelCapabilities(
 		stmt.bind(channelId, model, nowSeconds, timestamp, timestamp),
 	);
 	await db.batch(statements);
+	await db
+		.prepare(
+			"UPDATE channels SET auto_disable_hit_count = 0, auto_disabled_until = NULL, auto_disabled_reason_code = NULL, auto_disabled_permanent = 0, updated_at = ? WHERE id = ? AND status = ?",
+		)
+		.bind(timestamp, channelId, "active")
+		.run();
 }

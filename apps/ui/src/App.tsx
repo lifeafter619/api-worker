@@ -708,16 +708,24 @@ const App = () => {
 			proxy_model_failure_cooldown_threshold: String(
 				runtimeSettings?.model_failure_cooldown_threshold ?? 3,
 			),
-			proxy_model_failure_auto_disable_threshold: String(
-				runtimeSettings?.model_failure_auto_disable_threshold ?? 3,
+			channel_disable_error_codes:
+				runtimeSettings?.channel_disable_error_codes ?? [
+					"upstream_http_401",
+					"upstream_http_403",
+					"do_request_failed",
+					"proxy_upstream_fetch_exception",
+				],
+			channel_disable_error_threshold: String(
+				runtimeSettings?.channel_disable_error_threshold ?? 3,
+			),
+			channel_disable_error_code_minutes: String(
+				runtimeSettings?.channel_disable_error_code_minutes ?? 1440,
 			),
 			proxy_upstream_timeout_ms: String(
 				runtimeSettings?.upstream_timeout_ms ?? 180000,
 			),
 			proxy_retry_max_retries: String(runtimeSettings?.retry_max_retries ?? 5),
 			proxy_retry_sleep_ms: String(runtimeSettings?.retry_sleep_ms ?? 500),
-			proxy_retry_skip_error_codes:
-				runtimeSettings?.retry_skip_error_codes ?? [],
 			proxy_retry_sleep_error_codes:
 				runtimeSettings?.retry_sleep_error_codes ?? [
 					"system_cpu_overloaded",
@@ -1410,8 +1418,11 @@ const App = () => {
 			const failureCooldownThreshold = Number(
 				settingsForm.proxy_model_failure_cooldown_threshold,
 			);
-			const failureAutoDisableThreshold = Number(
-				settingsForm.proxy_model_failure_auto_disable_threshold,
+			const channelDisableErrorThreshold = Number(
+				settingsForm.channel_disable_error_threshold,
+			);
+			const channelDisableErrorCodeMinutes = Number(
+				settingsForm.channel_disable_error_code_minutes,
 			);
 			const upstreamTimeoutMs = Number(settingsForm.proxy_upstream_timeout_ms);
 			const retryMaxRetries = Number(settingsForm.proxy_retry_max_retries);
@@ -1425,8 +1436,8 @@ const App = () => {
 					),
 				);
 			};
-			const retrySkipErrorCodes = normalizeErrorCodeList(
-				settingsForm.proxy_retry_skip_error_codes,
+			const channelDisableErrorCodes = normalizeErrorCodeList(
+				settingsForm.channel_disable_error_codes,
 			);
 			const retrySleepErrorCodes = normalizeErrorCodeList(
 				settingsForm.proxy_retry_sleep_error_codes,
@@ -1474,11 +1485,19 @@ const App = () => {
 				return;
 			}
 			if (
-				Number.isNaN(failureAutoDisableThreshold) ||
-				failureAutoDisableThreshold < 1 ||
-				!Number.isInteger(failureAutoDisableThreshold)
+				Number.isNaN(channelDisableErrorThreshold) ||
+				channelDisableErrorThreshold < 1 ||
+				!Number.isInteger(channelDisableErrorThreshold)
 			) {
-				pushNotice("warning", "自动禁用阈值（按冷却次数）需为正整数");
+				pushNotice("warning", "渠道禁用阈值需为正整数");
+				return;
+			}
+			if (
+				Number.isNaN(channelDisableErrorCodeMinutes) ||
+				channelDisableErrorCodeMinutes < 0 ||
+				!Number.isInteger(channelDisableErrorCodeMinutes)
+			) {
+				pushNotice("warning", "命中后禁用时长需为非负整数");
 				return;
 			}
 			if (Number.isNaN(upstreamTimeoutMs) || upstreamTimeoutMs < 0) {
@@ -1563,11 +1582,12 @@ const App = () => {
 				channel_recovery_probe_schedule_time: channelRecoveryProbeScheduleTime,
 				proxy_model_failure_cooldown_minutes: failureCooldownMinutes,
 				proxy_model_failure_cooldown_threshold: failureCooldownThreshold,
-				proxy_model_failure_auto_disable_threshold: failureAutoDisableThreshold,
+				channel_disable_error_codes: channelDisableErrorCodes,
+				channel_disable_error_threshold: channelDisableErrorThreshold,
+				channel_disable_error_code_minutes: channelDisableErrorCodeMinutes,
 				proxy_upstream_timeout_ms: upstreamTimeoutMs,
 				proxy_retry_max_retries: retryMaxRetries,
 				proxy_retry_sleep_ms: retrySleepMs,
-				proxy_retry_skip_error_codes: retrySkipErrorCodes,
 				proxy_retry_sleep_error_codes: retrySleepErrorCodes,
 				proxy_zero_completion_as_error_enabled:
 					settingsForm.proxy_zero_completion_as_error_enabled,

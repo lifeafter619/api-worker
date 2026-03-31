@@ -21,6 +21,10 @@ export type ChannelRow = {
 	last_checkin_status?: string | null;
 	last_checkin_message?: string | null;
 	last_checkin_at?: string | null;
+	auto_disable_hit_count?: number | null;
+	auto_disabled_until?: number | null;
+	auto_disabled_reason_code?: string | null;
+	auto_disabled_permanent?: number | null;
 	created_at?: string | null;
 	updated_at?: string | null;
 };

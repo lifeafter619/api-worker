@@ -53,8 +53,11 @@ settings.get("/", async (c) => {
 			runtimeSettings.model_failure_cooldown_minutes,
 		proxy_model_failure_cooldown_threshold:
 			runtimeSettings.model_failure_cooldown_threshold,
-		proxy_model_failure_auto_disable_threshold:
-			runtimeSettings.model_failure_auto_disable_threshold,
+		channel_disable_error_codes: runtimeSettings.channel_disable_error_codes,
+		channel_disable_error_threshold:
+			runtimeSettings.channel_disable_error_threshold,
+		channel_disable_error_code_minutes:
+			runtimeSettings.channel_disable_error_code_minutes,
 		runtime_config: runtimeConfig,
 		runtime_settings: runtimeSettings,
 	});
@@ -79,12 +82,13 @@ settings.put("/", async (c) => {
 		upstream_timeout_ms?: number;
 		retry_max_retries?: number;
 		retry_sleep_ms?: number;
-		retry_skip_error_codes?: string[];
 		retry_sleep_error_codes?: string[];
+		channel_disable_error_codes?: string[];
+		channel_disable_error_threshold?: number;
+		channel_disable_error_code_minutes?: number;
 		zero_completion_as_error_enabled?: boolean;
 		model_failure_cooldown_minutes?: number;
 		model_failure_cooldown_threshold?: number;
-		model_failure_auto_disable_threshold?: number;
 		stream_usage_mode?: string;
 		stream_usage_max_parsers?: number;
 		stream_usage_parse_timeout_ms?: number;
@@ -171,22 +175,6 @@ settings.put("/", async (c) => {
 		runtimeTouched = true;
 	}
 
-	if (body.proxy_retry_skip_error_codes !== undefined) {
-		const normalized = normalizeErrorCodeList(
-			body.proxy_retry_skip_error_codes,
-		);
-		if (!normalized) {
-			return jsonError(
-				c,
-				400,
-				"invalid_proxy_retry_skip_error_codes",
-				"invalid_proxy_retry_skip_error_codes",
-			);
-		}
-		runtimePatch.retry_skip_error_codes = normalized;
-		runtimeTouched = true;
-	}
-
 	if (body.proxy_retry_sleep_error_codes !== undefined) {
 		const normalized = normalizeErrorCodeList(
 			body.proxy_retry_sleep_error_codes,
@@ -200,6 +188,52 @@ settings.put("/", async (c) => {
 			);
 		}
 		runtimePatch.retry_sleep_error_codes = normalized;
+		runtimeTouched = true;
+	}
+
+	if (body.channel_disable_error_codes !== undefined) {
+		const normalized = normalizeErrorCodeList(body.channel_disable_error_codes);
+		if (!normalized) {
+			return jsonError(
+				c,
+				400,
+				"invalid_channel_disable_error_codes",
+				"invalid_channel_disable_error_codes",
+			);
+		}
+		runtimePatch.channel_disable_error_codes = normalized;
+		runtimeTouched = true;
+	}
+
+	if (body.channel_disable_error_threshold !== undefined) {
+		const threshold = Number(body.channel_disable_error_threshold);
+		if (
+			Number.isNaN(threshold) ||
+			threshold < 1 ||
+			!Number.isInteger(threshold)
+		) {
+			return jsonError(
+				c,
+				400,
+				"invalid_channel_disable_error_threshold",
+				"invalid_channel_disable_error_threshold",
+			);
+		}
+		runtimePatch.channel_disable_error_threshold = threshold;
+		runtimeTouched = true;
+	}
+
+	if (body.channel_disable_error_code_minutes !== undefined) {
+		const minutes = Number(body.channel_disable_error_code_minutes);
+		if (Number.isNaN(minutes) || minutes < 0 || !Number.isInteger(minutes)) {
+			return jsonError(
+				c,
+				400,
+				"invalid_channel_disable_error_code_minutes",
+				"invalid_channel_disable_error_code_minutes",
+			);
+		}
+		runtimePatch.channel_disable_error_code_minutes = minutes;
 		runtimeTouched = true;
 	}
 
@@ -259,24 +293,6 @@ settings.put("/", async (c) => {
 			);
 		}
 		runtimePatch.model_failure_cooldown_threshold = threshold;
-		runtimeTouched = true;
-	}
-
-	if (body.proxy_model_failure_auto_disable_threshold !== undefined) {
-		const threshold = Number(body.proxy_model_failure_auto_disable_threshold);
-		if (
-			Number.isNaN(threshold) ||
-			threshold < 1 ||
-			!Number.isInteger(threshold)
-		) {
-			return jsonError(
-				c,
-				400,
-				"invalid_proxy_model_failure_auto_disable_threshold",
-				"invalid_proxy_model_failure_auto_disable_threshold",
-			);
-		}
-		runtimePatch.model_failure_auto_disable_threshold = threshold;
 		runtimeTouched = true;
 	}
 

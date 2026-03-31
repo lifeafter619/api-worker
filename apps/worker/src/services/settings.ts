@@ -9,7 +9,14 @@ const DEFAULT_CHANNEL_RECOVERY_PROBE_ENABLED = false;
 const DEFAULT_CHANNEL_RECOVERY_PROBE_SCHEDULE_TIME = "03:10";
 const DEFAULT_MODEL_FAILURE_COOLDOWN_MINUTES = 720;
 const DEFAULT_MODEL_FAILURE_COOLDOWN_THRESHOLD = 3;
-const DEFAULT_MODEL_FAILURE_AUTO_DISABLE_THRESHOLD = 3;
+const DEFAULT_CHANNEL_DISABLE_ERROR_CODES = [
+	"upstream_http_401",
+	"upstream_http_403",
+	"do_request_failed",
+	"proxy_upstream_fetch_exception",
+];
+const DEFAULT_CHANNEL_DISABLE_ERROR_THRESHOLD = 3;
+const DEFAULT_CHANNEL_DISABLE_ERROR_CODE_MINUTES = 1440;
 const DEFAULT_PROXY_STREAM_USAGE_MODE = "full";
 const DEFAULT_PROXY_STREAM_USAGE_MAX_PARSERS = 0;
 const DEFAULT_PROXY_STREAM_USAGE_PARSE_TIMEOUT_MS = 0;
@@ -18,7 +25,6 @@ const DEFAULT_PROXY_STREAM_OPTIONS_CAPABILITY_TTL_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_PROXY_UPSTREAM_TIMEOUT_MS = 180000;
 const DEFAULT_PROXY_RETRY_MAX_RETRIES = 5;
 const DEFAULT_PROXY_RETRY_SLEEP_MS = 500;
-const DEFAULT_PROXY_RETRY_SKIP_ERROR_CODES: string[] = [];
 const DEFAULT_PROXY_RETRY_SLEEP_ERROR_CODES = [
 	"system_cpu_overloaded",
 	"system_disk_overloaded",
@@ -41,13 +47,14 @@ const CHANNEL_RECOVERY_PROBE_SCHEDULE_TIME_KEY =
 	"channel_recovery_probe_schedule_time";
 const MODEL_FAILURE_COOLDOWN_KEY = "model_failure_cooldown_minutes";
 const MODEL_FAILURE_COOLDOWN_THRESHOLD_KEY = "model_failure_cooldown_threshold";
-const MODEL_FAILURE_AUTO_DISABLE_THRESHOLD_KEY =
-	"model_failure_auto_disable_threshold";
 const PROXY_UPSTREAM_TIMEOUT_KEY = "proxy_upstream_timeout_ms";
 const PROXY_RETRY_MAX_RETRIES_KEY = "proxy_retry_max_retries";
 const PROXY_RETRY_SLEEP_MS_KEY = "proxy_retry_sleep_ms";
-const PROXY_RETRY_SKIP_ERROR_CODES_KEY = "proxy_retry_skip_error_codes";
 const PROXY_RETRY_SLEEP_ERROR_CODES_KEY = "proxy_retry_sleep_error_codes";
+const CHANNEL_DISABLE_ERROR_CODES_KEY = "channel_disable_error_codes";
+const CHANNEL_DISABLE_ERROR_THRESHOLD_KEY = "channel_disable_error_threshold";
+const CHANNEL_DISABLE_ERROR_CODE_MINUTES_KEY =
+	"channel_disable_error_code_minutes";
 const PROXY_ZERO_COMPLETION_AS_ERROR_KEY =
 	"proxy_zero_completion_as_error_enabled";
 const PROXY_STREAM_USAGE_MODE_KEY = "proxy_stream_usage_mode";
@@ -70,12 +77,13 @@ const RUNTIME_SETTING_KEYS = [
 	PROXY_UPSTREAM_TIMEOUT_KEY,
 	PROXY_RETRY_MAX_RETRIES_KEY,
 	PROXY_RETRY_SLEEP_MS_KEY,
-	PROXY_RETRY_SKIP_ERROR_CODES_KEY,
 	PROXY_RETRY_SLEEP_ERROR_CODES_KEY,
+	CHANNEL_DISABLE_ERROR_CODES_KEY,
+	CHANNEL_DISABLE_ERROR_THRESHOLD_KEY,
+	CHANNEL_DISABLE_ERROR_CODE_MINUTES_KEY,
 	PROXY_ZERO_COMPLETION_AS_ERROR_KEY,
 	MODEL_FAILURE_COOLDOWN_KEY,
 	MODEL_FAILURE_COOLDOWN_THRESHOLD_KEY,
-	MODEL_FAILURE_AUTO_DISABLE_THRESHOLD_KEY,
 	PROXY_STREAM_USAGE_MODE_KEY,
 	PROXY_STREAM_USAGE_MAX_PARSERS_KEY,
 	PROXY_STREAM_USAGE_PARSE_TIMEOUT_KEY,
@@ -92,12 +100,13 @@ export type RuntimeProxyConfig = {
 	upstream_timeout_ms: number;
 	retry_max_retries: number;
 	retry_sleep_ms: number;
-	retry_skip_error_codes: string[];
 	retry_sleep_error_codes: string[];
+	channel_disable_error_codes: string[];
+	channel_disable_error_threshold: number;
+	channel_disable_error_code_minutes: number;
 	zero_completion_as_error_enabled: boolean;
 	model_failure_cooldown_minutes: number;
 	model_failure_cooldown_threshold: number;
-	model_failure_auto_disable_threshold: number;
 	stream_usage_mode: string;
 	stream_usage_max_parsers: number;
 	attempt_worker_fallback_enabled: boolean;
@@ -113,12 +122,13 @@ export type ProxyRuntimeSettings = {
 	upstream_timeout_ms: number;
 	retry_max_retries: number;
 	retry_sleep_ms: number;
-	retry_skip_error_codes: string[];
 	retry_sleep_error_codes: string[];
+	channel_disable_error_codes: string[];
+	channel_disable_error_threshold: number;
+	channel_disable_error_code_minutes: number;
 	zero_completion_as_error_enabled: boolean;
 	model_failure_cooldown_minutes: number;
 	model_failure_cooldown_threshold: number;
-	model_failure_auto_disable_threshold: number;
 	stream_usage_mode: string;
 	stream_usage_max_parsers: number;
 	stream_usage_parse_timeout_ms: number;
@@ -323,13 +333,21 @@ export async function getProxyRuntimeSettings(
 			settings[PROXY_RETRY_SLEEP_MS_KEY] ?? null,
 			DEFAULT_PROXY_RETRY_SLEEP_MS,
 		),
-		retry_skip_error_codes: parseErrorCodeListSetting(
-			settings[PROXY_RETRY_SKIP_ERROR_CODES_KEY] ?? null,
-			DEFAULT_PROXY_RETRY_SKIP_ERROR_CODES,
-		),
 		retry_sleep_error_codes: parseErrorCodeListSetting(
 			settings[PROXY_RETRY_SLEEP_ERROR_CODES_KEY] ?? null,
 			DEFAULT_PROXY_RETRY_SLEEP_ERROR_CODES,
+		),
+		channel_disable_error_codes: parseErrorCodeListSetting(
+			settings[CHANNEL_DISABLE_ERROR_CODES_KEY] ?? null,
+			DEFAULT_CHANNEL_DISABLE_ERROR_CODES,
+		),
+		channel_disable_error_threshold: parsePositiveSetting(
+			settings[CHANNEL_DISABLE_ERROR_THRESHOLD_KEY] ?? null,
+			DEFAULT_CHANNEL_DISABLE_ERROR_THRESHOLD,
+		),
+		channel_disable_error_code_minutes: parseNonNegativeSetting(
+			settings[CHANNEL_DISABLE_ERROR_CODE_MINUTES_KEY] ?? null,
+			DEFAULT_CHANNEL_DISABLE_ERROR_CODE_MINUTES,
 		),
 		zero_completion_as_error_enabled: parseBooleanSetting(
 			settings[PROXY_ZERO_COMPLETION_AS_ERROR_KEY] ?? null,
@@ -342,10 +360,6 @@ export async function getProxyRuntimeSettings(
 		model_failure_cooldown_threshold: parsePositiveSetting(
 			settings[MODEL_FAILURE_COOLDOWN_THRESHOLD_KEY] ?? null,
 			DEFAULT_MODEL_FAILURE_COOLDOWN_THRESHOLD,
-		),
-		model_failure_auto_disable_threshold: parsePositiveSetting(
-			settings[MODEL_FAILURE_AUTO_DISABLE_THRESHOLD_KEY] ?? null,
-			DEFAULT_MODEL_FAILURE_AUTO_DISABLE_THRESHOLD,
 		),
 		stream_usage_mode: normalizeStreamUsageMode(
 			settings[PROXY_STREAM_USAGE_MODE_KEY],
@@ -446,21 +460,41 @@ export async function setProxyRuntimeSettings(
 			),
 		);
 	}
-	if (update.retry_skip_error_codes !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				PROXY_RETRY_SKIP_ERROR_CODES_KEY,
-				stringifyErrorCodeList(update.retry_skip_error_codes),
-			),
-		);
-	}
 	if (update.retry_sleep_error_codes !== undefined) {
 		tasks.push(
 			upsertSetting(
 				db,
 				PROXY_RETRY_SLEEP_ERROR_CODES_KEY,
 				stringifyErrorCodeList(update.retry_sleep_error_codes),
+			),
+		);
+	}
+	if (update.channel_disable_error_codes !== undefined) {
+		tasks.push(
+			upsertSetting(
+				db,
+				CHANNEL_DISABLE_ERROR_CODES_KEY,
+				stringifyErrorCodeList(update.channel_disable_error_codes),
+			),
+		);
+	}
+	if (update.channel_disable_error_threshold !== undefined) {
+		tasks.push(
+			upsertSetting(
+				db,
+				CHANNEL_DISABLE_ERROR_THRESHOLD_KEY,
+				String(Math.max(1, Math.floor(update.channel_disable_error_threshold))),
+			),
+		);
+	}
+	if (update.channel_disable_error_code_minutes !== undefined) {
+		tasks.push(
+			upsertSetting(
+				db,
+				CHANNEL_DISABLE_ERROR_CODE_MINUTES_KEY,
+				String(
+					Math.max(0, Math.floor(update.channel_disable_error_code_minutes)),
+				),
 			),
 		);
 	}
@@ -489,17 +523,6 @@ export async function setProxyRuntimeSettings(
 				MODEL_FAILURE_COOLDOWN_THRESHOLD_KEY,
 				String(
 					Math.max(1, Math.floor(update.model_failure_cooldown_threshold)),
-				),
-			),
-		);
-	}
-	if (update.model_failure_auto_disable_threshold !== undefined) {
-		tasks.push(
-			upsertSetting(
-				db,
-				MODEL_FAILURE_AUTO_DISABLE_THRESHOLD_KEY,
-				String(
-					Math.max(1, Math.floor(update.model_failure_auto_disable_threshold)),
 				),
 			),
 		);

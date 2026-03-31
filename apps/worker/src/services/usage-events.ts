@@ -1,6 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { type AttemptLogInput, insertAttemptEvent } from "./attempt-events";
 import {
+	recordChannelDisableHit,
 	recordChannelModelError,
 	upsertChannelModelCapabilities,
 } from "./channel-model-capabilities";
@@ -28,7 +29,9 @@ export type UsageEvent =
 				errorCode: string;
 				cooldownSeconds: number;
 				cooldownFailureThreshold: number;
-				cooldownDisableThreshold: number;
+				channelDisableMatched: boolean;
+				channelDisableDurationSeconds: number;
+				channelDisableThreshold: number;
 				nowSeconds?: number;
 			};
 	  }
@@ -68,20 +71,39 @@ export async function processUsageEvent(
 	}
 	if (event.type === "model_error") {
 		const nowSeconds = resolveNowSeconds(event.payload.nowSeconds);
-		const result = await recordChannelModelError(
-			db,
-			event.payload.channelId,
-			event.payload.model,
-			event.payload.errorCode,
-			{
-				cooldownSeconds: event.payload.cooldownSeconds,
-				cooldownFailureThreshold: event.payload.cooldownFailureThreshold,
-				cooldownDisableThreshold: event.payload.cooldownDisableThreshold,
-			},
-			nowSeconds,
-		);
+		let channelDisabled = false;
+		if (event.payload.model && event.payload.cooldownSeconds > 0) {
+			const result = await recordChannelModelError(
+				db,
+				event.payload.channelId,
+				event.payload.model,
+				event.payload.errorCode,
+				{
+					cooldownSeconds: event.payload.cooldownSeconds,
+					cooldownFailureThreshold: event.payload.cooldownFailureThreshold,
+				},
+				nowSeconds,
+			);
+			channelDisabled = result.channelDisabled;
+		}
+		if (event.payload.channelDisableMatched) {
+			const disableResult = await recordChannelDisableHit(
+				db,
+				event.payload.channelId,
+				event.payload.errorCode,
+				{
+					disableDurationSeconds: event.payload.channelDisableDurationSeconds,
+					disableThreshold: event.payload.channelDisableThreshold,
+				},
+				nowSeconds,
+			);
+			channelDisabled =
+				channelDisabled ||
+				disableResult.channelTempDisabled ||
+				disableResult.channelPermanentlyDisabled;
+		}
 		return {
-			channelDisabled: result.channelDisabled,
+			channelDisabled,
 		};
 	}
 	if (event.type === "attempt_log") {

@@ -56,7 +56,7 @@ export const SettingsView = ({
 				all.add(normalized);
 			}
 		}
-		for (const code of settingsForm.proxy_retry_skip_error_codes) {
+		for (const code of settingsForm.channel_disable_error_codes) {
 			const normalized = String(code ?? "").trim();
 			if (normalized) {
 				all.add(normalized);
@@ -73,7 +73,7 @@ export const SettingsView = ({
 			.map((code) => ({ value: code, label: code }));
 	}, [
 		retryErrorCodeOptions,
-		settingsForm.proxy_retry_skip_error_codes,
+		settingsForm.channel_disable_error_codes,
 		settingsForm.proxy_retry_sleep_error_codes,
 	]);
 
@@ -315,27 +315,6 @@ export const SettingsView = ({
 						<div class="app-settings-row app-settings-row--stack">
 							<div class="app-settings-row__main">
 								<span class="app-settings-row__label">
-									需要跳过重试的错误码
-								</span>
-								<p class="app-settings-row__hint">错误后无需重试的列表</p>
-							</div>
-							<MultiSelect
-								class="app-settings-row__control app-settings-row__control--full"
-								options={mergedRetryErrorCodeOptions}
-								value={settingsForm.proxy_retry_skip_error_codes}
-								placeholder="选择需要跳过的错误码"
-								searchPlaceholder="搜索错误码"
-								emptyLabel="暂无可选错误码"
-								onChange={(next) => {
-									onFormChange({
-										proxy_retry_skip_error_codes: next,
-									});
-								}}
-							/>
-						</div>
-						<div class="app-settings-row app-settings-row--stack">
-							<div class="app-settings-row__main">
-								<span class="app-settings-row__label">
 									需要等待后重试的错误码
 								</span>
 								<p class="app-settings-row__hint">错误后重试需等待的列表</p>
@@ -350,6 +329,29 @@ export const SettingsView = ({
 								onChange={(next) => {
 									onFormChange({
 										proxy_retry_sleep_error_codes: next,
+									});
+								}}
+							/>
+						</div>
+						<div class="app-settings-row app-settings-row--stack">
+							<div class="app-settings-row__main">
+								<span class="app-settings-row__label">
+									触发渠道禁用的错误码
+								</span>
+								<p class="app-settings-row__hint">
+									命中后会累计禁用次数并执行临时禁用
+								</p>
+							</div>
+							<MultiSelect
+								class="app-settings-row__control app-settings-row__control--full"
+								options={mergedRetryErrorCodeOptions}
+								value={settingsForm.channel_disable_error_codes}
+								placeholder="选择触发禁用的错误码"
+								searchPlaceholder="搜索错误码"
+								emptyLabel="暂无可选错误码"
+								onChange={(next) => {
+									onFormChange({
+										channel_disable_error_codes: next,
 									});
 								}}
 							/>
@@ -431,39 +433,58 @@ export const SettingsView = ({
 							<div class="app-settings-row__main">
 								<label
 									class="app-settings-row__label"
-									for="proxy-model-failure-auto-disable-threshold"
+									for="channel-disable-error-threshold"
 								>
-									自动禁用阈值（按冷却次数）
+									渠道禁用阈值（次数）
 								</label>
 								<p class="app-settings-row__hint">
-									每次进入冷却窗口计数 +1；达到该次数后自动禁用渠道，最小为 1
+									命中禁用错误码累计达到该次数后，将直接禁用渠道
 								</p>
 							</div>
 							<Input
 								class="app-settings-row__control app-settings-row__control--compact"
-								id="proxy-model-failure-auto-disable-threshold"
-								name="proxy_model_failure_auto_disable_threshold"
+								id="channel-disable-error-threshold"
+								name="channel_disable_error_threshold"
 								type="number"
 								min="1"
 								step="1"
-								value={settingsForm.proxy_model_failure_auto_disable_threshold}
+								value={settingsForm.channel_disable_error_threshold}
 								onInput={(event) => {
 									const target = event.currentTarget as HTMLInputElement | null;
 									onFormChange({
-										proxy_model_failure_auto_disable_threshold:
-											target?.value ?? "",
+										channel_disable_error_threshold: target?.value ?? "",
 									});
 								}}
 							/>
 						</div>
-						<div class="app-settings-row app-settings-row--stack">
+						<div class="app-settings-row">
 							<div class="app-settings-row__main">
-								<span class="app-settings-row__label">策略说明</span>
+								<label
+									class="app-settings-row__label"
+									for="channel-disable-error-code-minutes"
+								>
+									命中后禁用时长（分钟）
+								</label>
 								<p class="app-settings-row__hint">
-									触发顺序：连续失败达到阈值 → 进入冷却窗口 → 冷却次数累计 →
-									达到自动禁用阈值后禁用渠道
+									命中禁用错误码后，会立即进入临时禁用时长；设为 0
+									表示只计数不临时禁用
 								</p>
 							</div>
+							<Input
+								class="app-settings-row__control app-settings-row__control--compact"
+								id="channel-disable-error-code-minutes"
+								name="channel_disable_error_code_minutes"
+								type="number"
+								min="0"
+								step="1"
+								value={settingsForm.channel_disable_error_code_minutes}
+								onInput={(event) => {
+									const target = event.currentTarget as HTMLInputElement | null;
+									onFormChange({
+										channel_disable_error_code_minutes: target?.value ?? "",
+									});
+								}}
+							/>
 						</div>
 						<div class="app-settings-row">
 							<div class="app-settings-row__main">

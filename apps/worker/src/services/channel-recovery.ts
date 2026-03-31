@@ -321,7 +321,10 @@ export async function recoverDisabledChannels(
 		orderBy: "created_at",
 		order: "DESC",
 	});
-	if (disabledChannels.length === 0) {
+	const probeTargets = disabledChannels.filter(
+		(channel) => Number(channel.auto_disabled_permanent ?? 0) <= 0,
+	);
+	if (probeTargets.length === 0) {
 		return {
 			total: 0,
 			attempted: 0,
@@ -331,7 +334,7 @@ export async function recoverDisabledChannels(
 		};
 	}
 	const items: DisabledChannelRecoveryResult[] = [];
-	for (const channel of disabledChannels) {
+	for (const channel of probeTargets) {
 		const result = await recoverDisabledChannel(db, channel, options);
 		items.push(result);
 	}

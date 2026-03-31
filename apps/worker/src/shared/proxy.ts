@@ -1362,15 +1362,11 @@ function buildRetryErrorCodeSet(codes: string[]): Set<string> {
 }
 
 function resolveRetryDecision(
-	skipErrorCodeSet: Set<string>,
 	sleepErrorCodeSet: Set<string>,
 	sleepMs: number,
 	errorCode: string | null,
 	errorMessage: string | null,
-): {
-	shouldSkip: boolean;
-	sleepMs: number;
-} {
+): number {
 	const normalizedErrorCode = normalizeRetryErrorCode(errorCode);
 	const lookupKeys: string[] = [];
 	if (normalizedErrorCode === "pond_hub_error") {
@@ -1382,19 +1378,11 @@ function resolveRetryDecision(
 		lookupKeys.push(normalizedErrorCode);
 	}
 	for (const key of lookupKeys) {
-		if (skipErrorCodeSet.has(key)) {
-			return { shouldSkip: true, sleepMs: 0 };
-		}
-	}
-	for (const key of lookupKeys) {
 		if (sleepErrorCodeSet.has(key)) {
-			return {
-				shouldSkip: false,
-				sleepMs: Math.max(0, Math.floor(sleepMs)),
-			};
+			return Math.max(0, Math.floor(sleepMs));
 		}
 	}
-	return { shouldSkip: false, sleepMs: 0 };
+	return 0;
 }
 
 function buildAttemptSequence(
@@ -2294,15 +2282,15 @@ proxy.all("/*", tokenAuth, async (c) => {
 		0,
 		Math.floor(Number(runtimeSettings.retry_sleep_ms ?? 0)),
 	);
-	const retrySkipErrorCodeSet = buildRetryErrorCodeSet(
-		runtimeSettings.retry_skip_error_codes ?? [],
-	);
 	const retrySleepErrorCodeSet = buildRetryErrorCodeSet(
 		runtimeSettings.retry_sleep_error_codes ?? [],
 	);
+	const channelDisableErrorCodeSet = buildRetryErrorCodeSet(
+		runtimeSettings.channel_disable_error_codes ?? [],
+	);
 	const dispatchRetryConfig: DispatchRetryConfig = {
 		sleepMs: retrySleepMs,
-		skipErrorCodes: Array.from(retrySkipErrorCodeSet),
+		skipErrorCodes: [],
 		sleepErrorCodes: Array.from(retrySleepErrorCodeSet),
 	};
 	const attemptBindingPolicy: AttemptBindingPolicy = {
@@ -2635,9 +2623,12 @@ proxy.all("/*", tokenAuth, async (c) => {
 		activeChannelsCacheKey,
 	);
 	if (!Array.isArray(activeChannelRows)) {
+		const selectionNowSeconds = Math.floor(Date.now() / 1000);
 		const activeChannels = await db
-			.prepare("SELECT * FROM channels WHERE status = ?")
-			.bind("active")
+			.prepare(
+				"SELECT * FROM channels WHERE status = ? AND (auto_disabled_until IS NULL OR auto_disabled_until <= ?)",
+			)
+			.bind("active", selectionNowSeconds)
 			.all<ChannelRecord>();
 		activeChannelRows = (activeChannels.results ?? []) as ChannelRecord[];
 		scheduleDbWrite(
@@ -2860,10 +2851,15 @@ proxy.all("/*", tokenAuth, async (c) => {
 		1,
 		Math.floor(runtimeSettings.model_failure_cooldown_threshold),
 	);
-	const cooldownAutoDisableThreshold = Math.max(
+	const channelDisableThreshold = Math.max(
 		1,
-		Math.floor(runtimeSettings.model_failure_auto_disable_threshold),
+		Math.floor(runtimeSettings.channel_disable_error_threshold),
 	);
+	const channelDisableDurationSeconds =
+		Math.max(
+			0,
+			Math.floor(runtimeSettings.channel_disable_error_code_minutes),
+		) * 60;
 	const responsesAffinityTtlSeconds = Math.max(
 		60,
 		Math.floor(runtimeSettings.responses_affinity_ttl_seconds),
@@ -2976,10 +2972,16 @@ proxy.all("/*", tokenAuth, async (c) => {
 		upstreamStatus: number | null;
 		errorCode: string | null;
 	}) => {
-		if (!options.model || cooldownSeconds <= 0) {
+		if (!shouldCooldown(options.upstreamStatus, options.errorCode)) {
 			return;
 		}
-		if (!shouldCooldown(options.upstreamStatus, options.errorCode)) {
+		const normalizedErrorCode = normalizeRetryErrorCode(options.errorCode);
+		const channelDisableMatched =
+			normalizedErrorCode.length > 0 &&
+			channelDisableErrorCodeSet.has(normalizedErrorCode);
+		const shouldRecordModelCooldown =
+			Boolean(options.model) && cooldownSeconds > 0;
+		if (!shouldRecordModelCooldown && !channelDisableMatched) {
 			return;
 		}
 		scheduleUsageEvent({
@@ -2992,9 +2994,11 @@ proxy.all("/*", tokenAuth, async (c) => {
 					(options.upstreamStatus === null
 						? ABNORMAL_SUCCESS_RESPONSE_ERROR_CODE
 						: String(options.upstreamStatus)),
-				cooldownSeconds,
+				cooldownSeconds: shouldRecordModelCooldown ? cooldownSeconds : 0,
 				cooldownFailureThreshold,
-				cooldownDisableThreshold: cooldownAutoDisableThreshold,
+				channelDisableMatched,
+				channelDisableDurationSeconds,
+				channelDisableThreshold,
 				nowSeconds,
 			},
 		});
@@ -3007,18 +3011,14 @@ proxy.all("/*", tokenAuth, async (c) => {
 		if (attemptNumber >= ordered.length) {
 			return false;
 		}
-		const decision = resolveRetryDecision(
-			retrySkipErrorCodeSet,
+		const decisionSleepMs = resolveRetryDecision(
 			retrySleepErrorCodeSet,
 			retrySleepMs,
 			errorCode,
 			errorMessage,
 		);
-		if (decision.shouldSkip) {
-			return false;
-		}
-		if (decision.sleepMs > 0) {
-			await sleep(decision.sleepMs);
+		if (decisionSleepMs > 0) {
+			await sleep(decisionSleepMs);
 		}
 		return true;
 	};
