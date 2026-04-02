@@ -59,12 +59,14 @@ node scripts/deploy.mjs update
 等价脚本：
 
 ```bash
+bun run deploy
 bun run deploy:init
 bun run deploy:update
 ```
 
 说明：
 
+- `bun run deploy`：交互式本地部署入口（引导选择 init/update 与参数）
 - `init`：全量初始化流程（包含本地迁移）
 - `update`：按参数执行构建与本地迁移判断
 - 该脚本用于本地复刻流程，不会执行远程 `wrangler deploy`
@@ -117,8 +119,14 @@ bun install
 统一启动命令：
 
 ```bash
+bun run dev
 bun run dev -- [可选参数]
 ```
+
+说明：
+
+- `bun run dev`：交互式启动入口（开始/状态/停止 + 参数选择）
+- `bun run dev -- ...`：命令行参数直连模式（适合脚本和自启动）
 
 可选参数：
 

@@ -12,7 +12,7 @@
 		"dev": "node scripts/dev.mjs",
 		"autostart": "node scripts/autostart.mjs",
 		"dev:worker": "node scripts/dev.mjs --no-attempt-worker --no-ui --no-hot-cache --build-ui",
-		"deploy": "node scripts/deploy.mjs update --target both",
+		"deploy": "node scripts/deploy.mjs",
 		"deploy:init": "node scripts/deploy.mjs init",
 		"deploy:update": "node scripts/deploy.mjs update",
 		"db:migrate:remote": "bun run prepare:remote-config -- --only worker && bun run --filter api-worker db:migrate:remote",

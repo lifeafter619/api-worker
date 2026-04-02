@@ -11,6 +11,7 @@ import {
 	writeSync,
 } from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 const BUN_CMD = (() => {
@@ -18,8 +19,11 @@ const BUN_CMD = (() => {
 		return process.env.BUN_BIN;
 	}
 	const npmExec = process.env.npm_execpath;
-	if (npmExec?.toLowerCase().includes("bun")) {
-		return npmExec;
+	if (npmExec && existsSync(npmExec)) {
+		const npmExecBaseName = path.basename(npmExec).toLowerCase();
+		if (npmExecBaseName === "bun" || npmExecBaseName === "bun.exe") {
+			return npmExec;
+		}
 	}
 	if (process.env.BUN_INSTALL) {
 		const candidate = path.join(
@@ -31,7 +35,7 @@ const BUN_CMD = (() => {
 			return candidate;
 		}
 	}
-	return "bun";
+	return process.platform === "win32" ? "bun.exe" : "bun";
 })();
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -40,17 +44,38 @@ const statePath = path.join(stateDir, "dev-runner.json");
 const logPath = path.join(stateDir, "dev-runner.log");
 
 const rawArgs = process.argv.slice(2);
-const daemonMode = rawArgs.includes("--_daemon");
-const backgroundMode = rawArgs.includes("--bg");
-const statusMode = rawArgs.includes("--status");
-const stopMode = rawArgs.includes("--stop");
+const interactiveDelegatedMode = rawArgs.includes("--_interactive-run");
+const runtimeArgs = rawArgs.filter((arg) => arg !== "--_interactive-run");
+const daemonMode = runtimeArgs.includes("--_daemon");
+const backgroundMode = runtimeArgs.includes("--bg");
+const statusMode = runtimeArgs.includes("--status");
+const stopMode = runtimeArgs.includes("--stop");
 
-const isRemote = rawArgs.includes("--cloud-db");
-const disableHotCache = rawArgs.includes("--no-hot-cache");
-const skipAttemptWorker = rawArgs.includes("--no-attempt-worker");
-const skipUi = rawArgs.includes("--no-ui");
-const buildUi = rawArgs.includes("--build-ui");
-const skipUiBuild = rawArgs.includes("--skip-ui-build");
+const isRemote = runtimeArgs.includes("--cloud-db");
+const disableHotCache = runtimeArgs.includes("--no-hot-cache");
+const skipAttemptWorker = runtimeArgs.includes("--no-attempt-worker");
+const skipUi = runtimeArgs.includes("--no-ui");
+const buildUi = runtimeArgs.includes("--build-ui");
+const skipUiBuild = runtimeArgs.includes("--skip-ui-build");
+const isInteractiveTerminal = Boolean(
+	process.stdin.isTTY && process.stdout.isTTY,
+);
+
+const devInteractiveBaseOptions = [
+	{ flag: "--no-attempt-worker", label: "不启动调用执行器 attempt-worker" },
+	{ flag: "--no-ui", label: "不启动 UI dev server" },
+	{ flag: "--no-hot-cache", label: "禁用热缓存 KV_HOT" },
+	{ flag: "--cloud-db", label: "连接云端 D1/KV" },
+];
+
+const devInteractiveUiBuildOptions = [
+	{ mode: "1", label: "构建 UI（--build-ui）", flags: ["--build-ui"] },
+	{
+		mode: "2",
+		label: "跳过 UI 预构建（--skip-ui-build）",
+		flags: ["--skip-ui-build"],
+	},
+];
 
 const parsePortFromEnv = (name, fallback) => {
 	const raw = process.env[name];
@@ -84,6 +109,128 @@ let shuttingDown = false;
 const printSync = (message) => {
 	writeSync(1, `${message}\n`);
 };
+
+const parseInteractiveSelection = (raw, maxIndex) => {
+	const text = String(raw ?? "").trim();
+	if (text.length === 0) {
+		return [];
+	}
+	const parts = text
+		.split(/[\s,，、]+/u)
+		.map((item) => item.trim())
+		.filter(Boolean);
+	const indexes = [];
+	for (const part of parts) {
+		const value = Number(part);
+		if (!Number.isInteger(value) || value < 1 || value > maxIndex) {
+			throw new Error(
+				`无效编号 "${part}"，请输入 1-${maxIndex} 之间的数字，可用空格分隔。`,
+			);
+		}
+		if (!indexes.includes(value)) {
+			indexes.push(value);
+		}
+	}
+	return indexes;
+};
+
+const parseUiBuildModeArgs = (selection) => {
+	const mode = String(selection ?? "").trim();
+	if (mode.length === 0) {
+		return ["--skip-ui-build"];
+	}
+	const matched = devInteractiveUiBuildOptions.find(
+		(item) => item.mode === mode,
+	);
+	if (!matched) {
+		throw new Error("UI 预构建策略无效，请输入 1 / 2。");
+	}
+	return matched.flags;
+};
+
+const promptInteractiveRunArgs = async () => {
+	const rl = createInterface({
+		input: process.stdin,
+		output: process.stdout,
+	});
+	try {
+		while (true) {
+			console.log("交互模式：开发服务");
+			console.log("1. 开始");
+			console.log("2. 查看后台状态");
+			console.log("3. 停止后台实例");
+			console.log("0. 退出");
+			const action = (await rl.question("请选择操作编号: ")).trim();
+			if (action === "0") {
+				return null;
+			}
+			if (action === "2") {
+				return ["--status"];
+			}
+			if (action === "3") {
+				return ["--stop"];
+			}
+			if (action === "1") {
+				console.log("");
+				console.log("开始开发服务：请选择附加参数（可多选）");
+				for (let i = 0; i < devInteractiveBaseOptions.length; i += 1) {
+					const option = devInteractiveBaseOptions[i];
+					console.log(`${i + 1}. ${option.label}: ${option.flag}`);
+				}
+				const selection = await rl.question(
+					"输入编号（示例: 1 4；直接回车=不附加参数）: ",
+				);
+				const selectedIndexes = parseInteractiveSelection(
+					selection,
+					devInteractiveBaseOptions.length,
+				);
+				const args = selectedIndexes.map(
+					(index) => devInteractiveBaseOptions[index - 1].flag,
+				);
+				console.log("");
+				console.log("UI 预构建策略（单选）:");
+				for (const option of devInteractiveUiBuildOptions) {
+					console.log(`${option.mode}. ${option.label}`);
+				}
+				const uiBuildMode = await rl.question(
+					"请选择 UI 预构建策略（默认 2）: ",
+				);
+				args.push(...parseUiBuildModeArgs(uiBuildMode));
+				const runMode = (
+					await rl.question("是否静默启动（1=否，2=是，默认 1）: ")
+				)
+					.trim()
+					.toLowerCase();
+				if (runMode === "2") {
+					args.push("--bg");
+				} else if (runMode.length > 0 && runMode !== "1") {
+					throw new Error("启动方式无效，请输入 1 / 2。");
+				}
+				return args;
+			}
+			console.log("输入无效，请输入 0 / 1 / 2 / 3。");
+		}
+	} finally {
+		rl.close();
+	}
+};
+
+const runSelf = (args) =>
+	new Promise((resolve, reject) => {
+		const child = spawn(process.execPath, [scriptPath, ...args], {
+			stdio: "inherit",
+			cwd: process.cwd(),
+			env: process.env,
+		});
+		child.on("error", reject);
+		child.on("exit", (code) => {
+			if (code === 0) {
+				resolve();
+				return;
+			}
+			reject(new Error(`交互执行失败，退出码 ${code ?? 1}`));
+		});
+	});
 
 const ensureStateDir = () => {
 	mkdirSync(stateDir, { recursive: true });
@@ -257,13 +404,8 @@ const buildCommands = () => {
 		commands.push({
 			name: "attempt-worker",
 			cmd: BUN_CMD,
-			args: [
-				"--cwd",
-				"apps/attempt-worker",
-				"x",
-				"wrangler",
-				...attemptWranglerArgs,
-			],
+			args: ["x", "wrangler", ...attemptWranglerArgs],
+			cwd: path.join(process.cwd(), "apps/attempt-worker"),
 		});
 	}
 	const workerWranglerArgs = ["dev", "--port", String(workerPort)];
@@ -282,7 +424,8 @@ const buildCommands = () => {
 	commands.push({
 		name: "worker",
 		cmd: BUN_CMD,
-		args: ["--cwd", "apps/worker", "x", "wrangler", ...workerWranglerArgs],
+		args: ["x", "wrangler", ...workerWranglerArgs],
+		cwd: path.join(process.cwd(), "apps/worker"),
 	});
 	if (!skipUi) {
 		commands.push({
@@ -303,7 +446,10 @@ const buildCommands = () => {
 
 const startLongRunningCommands = (commands) => {
 	for (const command of commands) {
-		const child = spawn(command.cmd, command.args, { stdio: "inherit" });
+		const child = spawn(command.cmd, command.args, {
+			stdio: "inherit",
+			cwd: command.cwd ?? process.cwd(),
+		});
 		children.set(command.name, child);
 		child.on("error", (error) => {
 			if (error.code === "ENOENT") {
@@ -368,7 +514,7 @@ const startBackground = () => {
 	}
 
 	ensureStateDir();
-	const cleanArgs = rawArgs.filter(
+	const cleanArgs = runtimeArgs.filter(
 		(arg) => arg !== "--bg" && arg !== "--_daemon",
 	);
 	const stdoutFd = openSync(logPath, "a");
@@ -409,6 +555,21 @@ process.on("exit", () => {
 });
 
 const main = async () => {
+	if (
+		!daemonMode &&
+		!interactiveDelegatedMode &&
+		runtimeArgs.length === 0 &&
+		isInteractiveTerminal
+	) {
+		const interactiveArgs = await promptInteractiveRunArgs();
+		if (!interactiveArgs) {
+			console.log("已退出交互模式。");
+			return;
+		}
+		await runSelf(["--_interactive-run", ...interactiveArgs]);
+		return;
+	}
+
 	const actionCount = [backgroundMode, statusMode, stopMode].filter(
 		Boolean,
 	).length;
@@ -434,7 +595,7 @@ const main = async () => {
 	if (daemonMode) {
 		writeState({
 			pid: process.pid,
-			args: rawArgs.filter((arg) => arg !== "--_daemon"),
+			args: runtimeArgs.filter((arg) => arg !== "--_daemon"),
 			startedAt: new Date().toISOString(),
 			logPath,
 		});

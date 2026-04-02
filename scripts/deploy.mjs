@@ -71,6 +71,9 @@ const parseArgs = () => {
 	if (positionals[0] === "init" || positionals[0] === "update") {
 		options.action = positionals[0];
 	}
+	if (!options.action && args.length > 0) {
+		options.action = "update";
+	}
 
 	return options;
 };
@@ -163,59 +166,74 @@ const runCapture = (command, args, options = {}) =>
 const runBun = (args, options) => run(BUN_CMD, args, options);
 const runBunx = (args, options) => run(BUN_CMD, ["x", ...args], options);
 
-const promptChoice = async (rl, label, choices, defaultValue) => {
-	const choicesText = choices.join("/");
-	const defaultText = defaultValue ? ` [${defaultValue}]` : "";
+const promptMenuChoice = async (rl, title, options, defaultValue) => {
+	console.log(title);
+	for (let i = 0; i < options.length; i += 1) {
+		console.log(`${i + 1}. ${options[i].label}`);
+	}
+	const defaultIndex = options.findIndex((item) => item.value === defaultValue);
+	const defaultHint = defaultIndex >= 0 ? `（默认 ${defaultIndex + 1}）` : "";
 	while (true) {
-		const answer = (
-			await rl.question(`${label} (${choicesText})${defaultText}: `)
-		)
-			.trim()
-			.toLowerCase();
-		if (!answer && defaultValue) {
-			return defaultValue;
+		const answer = (await rl.question(`请选择编号${defaultHint}: `)).trim();
+		if (!answer && defaultIndex >= 0) {
+			return options[defaultIndex].value;
 		}
 		const numeric = Number(answer);
 		if (
 			Number.isInteger(numeric) &&
 			numeric >= 1 &&
-			numeric <= choices.length
+			numeric <= options.length
 		) {
-			return choices[numeric - 1];
+			return options[numeric - 1].value;
 		}
-		if (choices.includes(answer)) {
-			return answer;
-		}
-		console.log(`无效输入，请输入 ${choicesText} 或序号 1-${choices.length}`);
+		console.log(`输入无效，请输入 1-${options.length} 的编号。`);
 	}
 };
 
-const promptOptions = async (options) => {
+const targetFlagsToKey = (flags) => {
+	if (flags.deployUi && flags.deployWorker) {
+		return "both";
+	}
+	if (flags.deployUi) {
+		return "frontend";
+	}
+	if (flags.deployWorker) {
+		return "backend";
+	}
+	return "both";
+};
+
+const promptOptions = async (options, defaults) => {
 	const rl = createInterface({ input: process.stdin, output: process.stdout });
 	try {
-		const action = await promptChoice(
+		const action = await promptMenuChoice(
 			rl,
-			"选择部署动作",
-			["init", "update"],
+			"请选择部署动作",
+			[
+				{ value: "init", label: "init（全量初始化）" },
+				{ value: "update", label: "update（增量更新）" },
+			],
 			"update",
 		);
 		options.action = action;
-		if (action === "init") {
-			options.target = "both";
-			options.migrate = "true";
-			return options;
-		}
-		options.target = await promptChoice(
+		options.target = await promptMenuChoice(
 			rl,
-			"选择部署目标",
-			["frontend", "backend", "both", "auto"],
-			options.target,
+			"请选择部署目标",
+			[
+				{ value: "frontend", label: "frontend（仅前端）" },
+				{ value: "backend", label: "backend（仅后端）" },
+				{ value: "both", label: "both（前后端）" },
+			],
+			defaults.target,
 		);
-		options.migrate = await promptChoice(
+		options.migrate = await promptMenuChoice(
 			rl,
-			"是否执行迁移",
-			["true", "false", "auto"],
-			options.migrate,
+			"请选择迁移策略",
+			[
+				{ value: "true", label: "true（执行迁移）" },
+				{ value: "false", label: "false（跳过迁移）" },
+			],
+			defaults.migrate,
 		);
 		return options;
 	} finally {
@@ -296,19 +314,26 @@ const resolveMigrate = (migrate, changedFiles) => {
 
 const main = async () => {
 	const options = parseArgs();
+	const changedFiles = await getChangedFiles();
+	const interactiveDefaults = {
+		target: targetFlagsToKey(resolveTarget("auto", changedFiles)),
+		migrate: "true",
+	};
 	if (!options.action) {
-		await promptOptions(options);
+		const prompted = await promptOptions(options, interactiveDefaults);
+		if (!prompted) {
+			console.log("已退出交互模式。");
+			return;
+		}
 	}
 	const configPath = path.resolve(ROOT, options.config);
 
 	await access(configPath);
 
-	if (options.action === "init") {
+	if (options.action === "init" && process.argv.slice(2).length > 0) {
 		options.target = "both";
 		options.migrate = "true";
 	}
-
-	const changedFiles = await getChangedFiles();
 	const targets = resolveTarget(options.target, changedFiles);
 	const shouldMigrate = resolveMigrate(options.migrate, changedFiles);
 
