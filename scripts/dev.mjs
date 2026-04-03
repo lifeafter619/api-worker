@@ -45,7 +45,8 @@ const logPath = path.join(stateDir, "dev-runner.log");
 const generatedWranglerRoot = path.join(stateDir, "generated", "wrangler");
 const workerAppDir = path.join(process.cwd(), "apps/worker");
 const attemptWorkerAppDir = path.join(process.cwd(), "apps/attempt-worker");
-const nullDevicePath = process.platform === "win32" ? "\\\\.\\NUL" : "/dev/null";
+const nullDevicePath =
+	process.platform === "win32" ? "\\\\.\\NUL" : "/dev/null";
 
 const rawArgs = process.argv.slice(2);
 const interactiveDelegatedMode = rawArgs.includes("--_interactive-run");
@@ -514,8 +515,45 @@ const stripNamedBlock = (sourceText, header) => {
 	return `${output.join("\n").replace(/\n+$/u, "")}\n`;
 };
 
+const toTomlLiteralPath = (filePath) =>
+	`'${path.resolve(filePath).replace(/'/g, "''")}'`;
+
+const rewriteConfigPathsForExternalOutput = (sourceText, sourceDir) => {
+	const rewriteMaybeRelative = (rawPath) => {
+		if (path.isAbsolute(rawPath)) {
+			return toTomlLiteralPath(rawPath);
+		}
+		return toTomlLiteralPath(path.resolve(sourceDir, rawPath));
+	};
+
+	return sourceText
+		.replace(
+			/(\bmain\s*=\s*)(["'])([^"']+)\2/u,
+			(_, prefix, _quote, rawPath) =>
+				`${prefix}${rewriteMaybeRelative(rawPath)}`,
+		)
+		.replace(
+			/(\[assets\][\s\S]*?\bdirectory\s*=\s*)(["'])([^"']+)\2/u,
+			(_, prefix, _quote, rawPath) =>
+				`${prefix}${rewriteMaybeRelative(rawPath)}`,
+		);
+};
+
 const resolveGeneratedConfigPath = (target, filename) =>
 	path.join(generatedWranglerRoot, target, filename);
+
+const ensureLocalConfigForRun = (target) => {
+	const sourcePath = path.join(process.cwd(), "apps", target, "wrangler.toml");
+	const sourceText = readFileSync(sourcePath, "utf8");
+	const outputPath = resolveGeneratedConfigPath(target, ".wrangler.local.toml");
+	const rewrittenText = rewriteConfigPathsForExternalOutput(
+		sourceText,
+		path.dirname(sourcePath),
+	);
+	mkdirSync(path.dirname(outputPath), { recursive: true });
+	writeFileSync(outputPath, rewrittenText, "utf8");
+	return outputPath;
+};
 
 const resolveWorkerBaseConfig = () => {
 	if (useRemoteD1) {
@@ -528,7 +566,7 @@ const resolveWorkerBaseConfig = () => {
 	}
 	return disableHotCache
 		? resolveGeneratedConfigPath("worker", ".wrangler.local.no-hot-cache.toml")
-		: path.join(workerAppDir, "wrangler.toml");
+		: ensureLocalConfigForRun("worker");
 };
 
 const ensureWorkerConfigForRun = () => {
@@ -575,6 +613,11 @@ const buildCommands = () => {
 					"attempt-worker",
 					".wrangler.local.no-hot-cache.toml",
 				),
+			);
+		} else {
+			attemptWranglerArgs.push(
+				"--config",
+				ensureLocalConfigForRun("attempt-worker"),
 			);
 		}
 		if (useRemoteWorker) {
