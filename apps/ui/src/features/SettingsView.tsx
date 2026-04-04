@@ -358,10 +358,10 @@ export const SettingsView = ({
 						<div class="app-settings-row">
 							<div class="app-settings-row__main">
 								<span class="app-settings-row__label">
-									启用禁用渠道自动抽测恢复
+									启用已禁用站点自动恢复评估
 								</span>
 								<p class="app-settings-row__hint">
-									每天按设定时间探测禁用渠道，每个渠道随机选模型验证，成功后自动恢复
+									每天按设定时间对已禁用站点执行统一验证，只有通过真实服务验证才自动恢复
 								</p>
 							</div>
 							<div class="app-settings-row__switch">
@@ -379,10 +379,10 @@ export const SettingsView = ({
 									class="app-settings-row__label"
 									for="channel-recovery-probe-schedule-time"
 								>
-									抽测时间（中国时间）
+									评估时间（中国时间）
 								</label>
 								<p class="app-settings-row__hint">
-									每天执行禁用渠道抽测恢复任务的时间
+									每天执行已禁用站点评估恢复任务的时间
 								</p>
 							</div>
 							<Input
@@ -898,7 +898,7 @@ export const SettingsView = ({
 					<div class="app-settings-group__header">
 						<h4 class="app-settings-group__title">站点任务</h4>
 						<p class="app-settings-group__caption">
-							配置站点测试、签到与恢复探测任务
+							配置站点验证、签到与恢复评估任务
 						</p>
 					</div>
 					<div class="app-settings-list app-settings-list--allow-overflow">
@@ -911,7 +911,7 @@ export const SettingsView = ({
 									站点任务并发上限
 								</label>
 								<p class="app-settings-row__hint">
-									控制批量签到和恢复探测时的并发执行数量
+									控制批量签到、批量验证与恢复评估时的并发执行数量
 								</p>
 							</div>
 							<Input

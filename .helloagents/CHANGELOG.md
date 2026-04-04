@@ -4,6 +4,10 @@
 
 ### 变更
 
+- **[channels/sites/admin-ui/settings]**: 统一站点验证与恢复评估语义，验证结果改为阶段化输出并接入真实 provider-aware 服务验证链路 — by openclaw
+  - 方案: [202604042102_site-verification-system](plan/202604042102_site-verification-system/)
+  - 决策: site-verification-system#D001(统一站点验证语义并复用真实代理链路)
+
 - **[tooling/docs]**: 清理仓库内本地 unit/service 测试文件，保留 Playwright E2E，并同步校验链说明 — by openclaw
   - 方案: [202604031348_remove-all-test-files](archive/2026-04/202604031348_remove-all-test-files/)
   - 决策: remove-all-test-files#D001(删除本地 unit/service 测试，但保留 Playwright E2E)

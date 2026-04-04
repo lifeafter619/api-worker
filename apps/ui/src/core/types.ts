@@ -30,8 +30,90 @@ export type Site = {
 	last_checkin_status?: string | null;
 	last_checkin_message?: string | null;
 	last_checkin_at?: string | null;
+	verification?: SiteVerificationSummary | null;
 	created_at?: string | null;
 	updated_at?: string | null;
+};
+
+export type VerificationStageStatus = "pass" | "warn" | "fail" | "skip";
+
+export type VerificationVerdict =
+	| "serving"
+	| "degraded"
+	| "failed"
+	| "recoverable"
+	| "not_recoverable";
+
+export type VerificationSuggestedAction =
+	| "none"
+	| "retry"
+	| "fix_credentials"
+	| "fix_endpoint"
+	| "fix_model_config"
+	| "manual_review";
+
+export type VerificationStageResult = {
+	status: VerificationStageStatus;
+	code: string;
+	message: string;
+};
+
+export type SiteVerificationSummary = {
+	verdict: VerificationVerdict;
+	message: string;
+	checked_at: string;
+	suggested_action: VerificationSuggestedAction;
+	selected_model?: string | null;
+	stage_codes?: Record<string, string>;
+};
+
+export type SiteVerificationResult = {
+	site_id: string;
+	site_name: string;
+	mode: "service" | "recovery";
+	verdict: VerificationVerdict;
+	message: string;
+	suggested_action: VerificationSuggestedAction;
+	stages: {
+		connectivity: VerificationStageResult;
+		capability: VerificationStageResult;
+		service: VerificationStageResult;
+		recovery: VerificationStageResult;
+	};
+	selected_model: string | null;
+	selected_token: {
+		id?: string;
+		name?: string;
+	} | null;
+	discovered_models: string[];
+	token_summary: {
+		total: number;
+		success: number;
+		failed: number;
+	} | null;
+	trace: {
+		latency_ms?: number;
+		upstream_status?: number;
+		detail_code?: string;
+		detail_message?: string;
+	};
+	checked_at: string;
+};
+
+export type SiteVerificationBatchSummary = {
+	total: number;
+	serving: number;
+	degraded: number;
+	failed: number;
+	recoverable: number;
+	not_recoverable: number;
+	skipped: number;
+};
+
+export type SiteVerificationBatchReport = {
+	summary: SiteVerificationBatchSummary;
+	items: SiteVerificationResult[];
+	runs_at: string;
 };
 
 export type Token = {

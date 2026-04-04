@@ -19,6 +19,7 @@ import {
 import {
 	getSiteCheckinLabel,
 	getSiteTypeLabel,
+	getVerificationVerdictLabel,
 	type SiteSortKey,
 	type SiteSortState,
 } from "../core/sites";
@@ -49,7 +50,7 @@ type SitesViewProps = {
 	onCloseModal: () => void;
 	onEdit: (site: Site) => void;
 	onSubmit: (event: Event) => void;
-	onTest: (id: string) => void;
+	onVerify: (id: string) => void;
 	onCheckin: (site: Site) => void;
 	onToggle: (id: string, status: string) => void;
 	onDelete: (site: Site) => void;
@@ -59,10 +60,10 @@ type SitesViewProps = {
 	onSortChange: (next: SiteSortState) => void;
 	onFormChange: (patch: Partial<SiteForm>) => void;
 	onRunAll: () => void;
-	onTestAll: () => void;
-	onProbeRecovery: () => void;
-	testFailureCount?: number;
-	onOpenTestFailures?: () => void;
+	onVerifyAll: () => void;
+	onEvaluateRecovery: () => void;
+	failureCount?: number;
+	onOpenVerificationReport?: () => void;
 };
 
 const pageSizeOptions = [10, 20, 50];
@@ -124,7 +125,7 @@ export const SitesView = ({
 	onCloseModal,
 	onEdit,
 	onSubmit,
-	onTest,
+	onVerify,
 	onCheckin,
 	onToggle,
 	onDelete,
@@ -134,18 +135,18 @@ export const SitesView = ({
 	onSortChange,
 	onFormChange,
 	onRunAll,
-	onTestAll,
-	onProbeRecovery,
-	testFailureCount = 0,
-	onOpenTestFailures,
+	onVerifyAll,
+	onEvaluateRecovery,
+	failureCount = 0,
+	onOpenVerificationReport,
 }: SitesViewProps) => {
 	const isEditing = Boolean(editingSite);
 	const pageItems = buildPageItems(sitePage, siteTotalPages);
 	const today = getBeijingDateString();
 	const isSubmitting = isActionPending("site:submit");
-	const isTestingAll = isActionPending("site:testAll");
+	const isVerifyingAll = isActionPending("site:verifyAll");
 	const isCheckinAll = isActionPending("site:checkinAll");
-	const isProbeRecovery = isActionPending("site:probeRecovery");
+	const isRecoveryEvaluate = isActionPending("site:recoveryEvaluate");
 	const [localSearch, setLocalSearch] = useState(siteSearch);
 	const isOfficialType =
 		siteForm.site_type === "openai" ||
@@ -267,7 +268,7 @@ export const SitesView = ({
 					<div>
 						<h3 class="app-title text-lg">站点管理</h3>
 						<p class="app-subtitle">
-							统一维护调用令牌、系统令牌与站点类型，并支持测试、签到与恢复探测。
+							统一维护调用令牌、系统令牌与站点类型，并支持验证、签到与恢复评估。
 						</p>
 					</div>
 					<div class="flex flex-wrap items-center gap-2">
@@ -301,29 +302,29 @@ export const SitesView = ({
 							class="h-9 px-4 text-xs"
 							size="sm"
 							type="button"
-							disabled={isTestingAll}
-							onClick={onTestAll}
+							disabled={isVerifyingAll}
+							onClick={onVerifyAll}
 						>
-							{isTestingAll ? "批量测试中..." : "批量测试"}
+							{isVerifyingAll ? "批量验证中..." : "批量验证"}
 						</Button>
 						<Button
 							class="h-9 px-4 text-xs"
 							size="sm"
 							type="button"
-							disabled={isProbeRecovery}
-							onClick={onProbeRecovery}
+							disabled={isRecoveryEvaluate}
+							onClick={onEvaluateRecovery}
 						>
-							{isProbeRecovery ? "探测中..." : "探测可恢复站点"}
+							{isRecoveryEvaluate ? "评估中..." : "评估恢复"}
 						</Button>
 						<Button
 							class="h-9 px-4 text-xs"
 							size="sm"
 							type="button"
-							disabled={testFailureCount <= 0 || !onOpenTestFailures}
-							onClick={() => onOpenTestFailures?.()}
+							disabled={failureCount <= 0 || !onOpenVerificationReport}
+							onClick={() => onOpenVerificationReport?.()}
 						>
-							失败清单
-							{testFailureCount > 0 ? ` (${testFailureCount})` : ""}
+							验证报告
+							{failureCount > 0 ? ` (${failureCount})` : ""}
 						</Button>
 						<Button
 							class="h-9 px-4 text-xs"
@@ -404,7 +405,7 @@ export const SitesView = ({
 									site.system_token && site.system_userid,
 								);
 								const callTokenCount = site.call_tokens?.length ?? 0;
-								const testPending = isActionPending(`site:test:${site.id}`);
+								const verifyPending = isActionPending(`site:verify:${site.id}`);
 								const checkinPending = isActionPending(
 									`site:checkin:${site.id}`,
 								);
@@ -427,6 +428,14 @@ export const SitesView = ({
 												<p class="truncate text-xs text-[color:var(--app-ink-muted)]">
 													{site.base_url}
 												</p>
+												{site.verification && (
+													<p class="mt-1 truncate text-[11px] text-[color:var(--app-ink-muted)]">
+														最近验证：
+														{getVerificationVerdictLabel(
+															site.verification.verdict,
+														)}
+													</p>
+												)}
 											</div>
 											<Chip
 												class="text-[10px] uppercase tracking-widest"
@@ -487,10 +496,10 @@ export const SitesView = ({
 												class="h-9 w-full px-3 text-xs"
 												size="sm"
 												type="button"
-												disabled={testPending}
-												onClick={() => onTest(site.id)}
+												disabled={verifyPending}
+												onClick={() => onVerify(site.id)}
 											>
-												{testPending ? "测试中..." : "测试"}
+												{verifyPending ? "验证中..." : "验证"}
 											</Button>
 											<Button
 												class="h-9 w-full px-3 text-xs"
@@ -598,7 +607,9 @@ export const SitesView = ({
 									const canCheckin = site.site_type === "new-api";
 									const checkinDisabled = !canCheckin;
 									const callTokenCount = site.call_tokens?.length ?? 0;
-									const testPending = isActionPending(`site:test:${site.id}`);
+									const verifyPending = isActionPending(
+										`site:verify:${site.id}`,
+									);
 									const checkinPending = isActionPending(
 										`site:checkin:${site.id}`,
 									);
@@ -629,6 +640,14 @@ export const SitesView = ({
 													>
 														{site.base_url}
 													</span>
+													{site.verification && (
+														<span class="truncate text-[11px] text-[color:var(--app-ink-muted)]">
+															最近验证：
+															{getVerificationVerdictLabel(
+																site.verification.verdict,
+															)}
+														</span>
+													)}
 												</div>
 											)}
 											{visibleColumnSet.has("type") && (
@@ -676,10 +695,10 @@ export const SitesView = ({
 														class="h-9 px-3 text-xs"
 														size="sm"
 														type="button"
-														disabled={testPending}
-														onClick={() => onTest(site.id)}
+														disabled={verifyPending}
+														onClick={() => onVerify(site.id)}
 													>
-														{testPending ? "测试中..." : "测试"}
+														{verifyPending ? "验证中..." : "验证"}
 													</Button>
 													<Button
 														class="h-9 px-3 text-xs"

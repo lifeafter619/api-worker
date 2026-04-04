@@ -1,4 +1,10 @@
-import type { Site } from "./types";
+import type {
+	Site,
+	SiteVerificationBatchSummary,
+	SiteVerificationResult,
+	VerificationVerdict,
+	VerificationStageStatus,
+} from "./types";
 import { getBeijingDateString } from "./utils";
 
 export type SiteSortKey =
@@ -17,19 +23,6 @@ export type SiteSortState = {
 	direction: SiteSortDirection;
 };
 
-export type SiteTestStatus = "success" | "failed" | "skipped";
-
-export type SiteTestResult = {
-	status: SiteTestStatus;
-};
-
-export type SiteTestSummary = {
-	total: number;
-	success: number;
-	failed: number;
-	skipped: number;
-};
-
 export const SITE_TYPE_LABELS: Record<Site["site_type"], string> = {
 	"new-api": "New API",
 	"done-hub": "Done Hub",
@@ -45,27 +38,63 @@ export const getSiteTypeLabel = (siteType: Site["site_type"]) =>
 export const getSiteStatusLabel = (status: string) =>
 	status === "active" ? "启用" : "禁用";
 
-export const summarizeSiteTests = (
-	results: SiteTestResult[],
-): SiteTestSummary => {
-	return results.reduce(
+export const getVerificationStageTone = (status: VerificationStageStatus) => {
+	if (status === "pass") {
+		return "success";
+	}
+	if (status === "warn") {
+		return "warning";
+	}
+	if (status === "fail") {
+		return "danger";
+	}
+	return "muted";
+};
+
+export const getVerificationVerdictLabel = (verdict: VerificationVerdict) => {
+	if (verdict === "serving") {
+		return "可服务";
+	}
+	if (verdict === "degraded") {
+		return "部分异常";
+	}
+	if (verdict === "recoverable") {
+		return "可恢复";
+	}
+	if (verdict === "not_recoverable") {
+		return "暂不可恢复";
+	}
+	return "不可服务";
+};
+
+export const summarizeVerificationResults = (
+	items: SiteVerificationResult[],
+): SiteVerificationBatchSummary => {
+	return items.reduce(
 		(acc, item) => {
 			acc.total += 1;
-			if (item.status === "success") {
-				acc.success += 1;
-			} else if (item.status === "failed") {
-				acc.failed += 1;
+			if (item.verdict === "serving") {
+				acc.serving += 1;
+			} else if (item.verdict === "degraded") {
+				acc.degraded += 1;
+			} else if (item.verdict === "recoverable") {
+				acc.recoverable += 1;
+			} else if (item.verdict === "not_recoverable") {
+				acc.not_recoverable += 1;
 			} else {
-				acc.skipped += 1;
+				acc.failed += 1;
 			}
 			return acc;
 		},
 		{
 			total: 0,
-			success: 0,
+			serving: 0,
+			degraded: 0,
 			failed: 0,
+			recoverable: 0,
+			not_recoverable: 0,
 			skipped: 0,
-		} as SiteTestSummary,
+		} satisfies SiteVerificationBatchSummary,
 	);
 };
 

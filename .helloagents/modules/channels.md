@@ -2,7 +2,7 @@
 
 ## 职责
 - 渠道配置的增删改查
-- 渠道连通性测试与模型同步
+- 渠道验证结果聚合、模型同步与状态回写
 - 渠道权重与状态管理
 
 ## 接口定义
@@ -10,7 +10,7 @@
 - `POST /api/channels` 新建渠道
 - `PATCH /api/channels/:id` 更新渠道
 - `DELETE /api/channels/:id` 删除渠道
-- `POST /api/channels/:id/test` 连通性测试
+- `POST /api/channels/:id/test` 渠道验证（统一返回阶段化验证结果）
 - `GET /api/sites` 站点聚合列表（聚合 channels + channel_call_tokens）
 - `GET /api/channel` New API 兼容列表
 - `GET /api/channel/search` New API 兼容搜索
@@ -27,9 +27,11 @@
 ## 行为规范
 - `base_url` 保存为无尾斜杠格式
 - 创建渠道时可传入自定义 `id`，未提供则自动生成
-- 连通性测试会对调用令牌逐个调用 `/v1/models` 并汇总模型
-- 至少一枚令牌测试成功时更新 `models_json` 并返回成功/失败统计
-- 连通性测试不会覆盖已禁用渠道的状态（保持 `disabled`）
+- 渠道验证会输出 `connectivity / capability / service / recovery` 四阶段结果
+- openai/new-api/subapi/done-hub 类型会优先尝试模型发现；Anthropic/Gemini 直接基于已配置模型做真实服务验证
+- 服务验证会复用真实 provider-aware 请求构造能力，而不是只依赖固定 `/v1/models` 探针
+- 验证完成后会把验证摘要写入 `metadata_json.verification`，并同步更新 `models_json`
+- 已禁用渠道在验证通过时仍保持 `disabled`，仅由恢复评估流程决定是否恢复
 - New API 兼容层支持 `type`/`group`/`priority` 等字段映射，并保留扩展字段到 `metadata_json`
 - New API 标签（tag）存储在 `metadata_json.tag`，标签接口按该字段批量更新
 - New API 分组列表从 `group_name` 字段解析，空时返回 `default`

@@ -10,6 +10,8 @@
 		"prepare:no-hot-cache-config": "node scripts/prepare-no-hot-cache-config.mjs",
 		"build:ui": "bun --filter api-worker-ui build",
 		"dev": "node scripts/dev.mjs",
+		"dev:attempt-worker": "bun --filter attempt-worker dev",
+		"dev:ui": "bun --filter api-worker-ui dev --host 0.0.0.0 --port 4173",
 		"autostart": "node scripts/autostart.mjs",
 		"dev:worker": "node scripts/dev.mjs --no-attempt-worker --no-ui --no-hot-cache --build-ui",
 		"deploy": "node scripts/deploy.mjs",

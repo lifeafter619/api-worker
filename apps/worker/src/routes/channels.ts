@@ -1,11 +1,6 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import {
-	listCallTokens,
-	updateCallTokenModels,
-} from "../services/channel-call-token-repo";
-import { modelsToJson } from "../services/channel-models";
-import {
 	channelExists,
 	deleteChannel,
 	getChannelById,
@@ -13,9 +8,8 @@ import {
 	listChannels,
 	updateChannel,
 } from "../services/channel-repo";
-import { updateChannelTestResult } from "../services/channel-testing";
 import { triggerBackupAfterDataChange } from "../services/backup-auto-sync";
-import { executeSiteTestTask } from "../services/site-task-dispatcher";
+import { verifyChannelById } from "../services/site-task-dispatcher";
 import { invalidateSelectionHotCache } from "../services/hot-kv";
 import { generateToken } from "../utils/crypto";
 import { jsonError } from "../utils/http";
@@ -174,67 +168,12 @@ channels.delete("/:id", async (c) => {
  */
 channels.post("/:id/test", async (c) => {
 	const id = c.req.param("id");
-	const channel = await getChannelById(c.env.DB, id);
-	if (!channel) {
+	const result = await verifyChannelById(c.env.DB, id);
+	if (!result) {
 		return jsonError(c, 404, "channel_not_found", "channel_not_found");
 	}
-
-	const callTokenRows = await listCallTokens(c.env.DB, {
-		channelIds: [id],
-	});
-	const tokens =
-		callTokenRows.length > 0
-			? callTokenRows.map((row) => ({
-					id: row.id,
-					name: row.name,
-					api_key: row.api_key,
-				}))
-			: [
-					{
-						id: "primary",
-						name: "主调用令牌",
-						api_key: String(channel.api_key),
-					},
-				];
-
-	const summary = await executeSiteTestTask(c.env.DB, c.env, {
-		base_url: String(channel.base_url),
-		tokens,
-	});
-	if (!summary.ok) {
-		await updateChannelTestResult(c.env.DB, id, {
-			ok: false,
-			elapsed: summary.elapsed,
-		});
-		return jsonError(c, 502, "channel_unreachable", "channel_unreachable");
-	}
-
-	const tokenIdSet = new Set(callTokenRows.map((row) => row.id));
-	for (const item of summary.items) {
-		if (!item.ok || !item.tokenId || !tokenIdSet.has(item.tokenId)) {
-			continue;
-		}
-		await updateCallTokenModels(c.env.DB, item.tokenId, item.models, nowIso());
-	}
-
-	const models = summary.models.map((id) => ({ id }));
-	await updateChannelTestResult(c.env.DB, id, {
-		ok: true,
-		elapsed: summary.elapsed,
-		models: summary.models,
-		modelsJson: modelsToJson(summary.models),
-	});
-
 	await invalidateSelectionHotCache(c.env.KV_HOT);
-	return c.json({
-		ok: true,
-		models,
-		token_summary: {
-			total: summary.total,
-			success: summary.success,
-			failed: summary.failed,
-		},
-	});
+	return c.json(result);
 });
 
 export default channels;

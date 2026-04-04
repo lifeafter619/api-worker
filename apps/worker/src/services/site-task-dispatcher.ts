@@ -1,12 +1,27 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import type { Bindings } from "../env";
-import { runCheckin, summarizeCheckin, type CheckinResultItem, type CheckinSummary } from "./checkin";
+import {
+	runCheckin,
+	summarizeCheckin,
+	type CheckinResultItem,
+	type CheckinSummary,
+} from "./checkin";
 import { beijingDateString, nowIso } from "../utils/time";
-import { listChannels, getChannelById, updateChannelCheckinResult } from "./channel-repo";
+import {
+	listChannels,
+	getChannelById,
+	updateChannelCheckinResult,
+} from "./channel-repo";
 import { getProxyRuntimeSettings } from "./settings";
-import { listCallTokens, updateCallTokenModels } from "./channel-call-token-repo";
-import { updateChannelTestResult } from "./channel-testing";
+import { listCallTokens } from "./channel-call-token-repo";
 import { runDisabledChannelRecoveryProbe } from "./channel-recovery-task";
+import {
+	buildVerificationBatchResult,
+	persistSiteVerificationResult,
+	verifySiteChannel,
+	type SiteVerificationBatchResult,
+	type SiteVerificationResult,
+} from "./site-verification";
 import type {
 	SiteTaskCheckinResponse,
 	SiteTaskProbeRequest,
@@ -41,16 +56,11 @@ export type CheckinRunResult = {
 export type DisabledChannelRecoveryResult = {
 	attempted: boolean;
 	recovered: boolean;
-	reason:
-		| "recovered"
-		| "already_active"
-		| "no_disabled_channel"
-		| "missing_token"
-		| "token_model_test_failed"
-		| "completion_probe_failed";
+	reason: string;
 	channel_id?: string;
 	channel_name?: string;
 	model?: string;
+	verification?: SiteVerificationResult;
 };
 
 export type DisabledChannelRecoveryBatchResult = {
@@ -60,6 +70,103 @@ export type DisabledChannelRecoveryBatchResult = {
 	failed: number;
 	items: DisabledChannelRecoveryResult[];
 };
+
+export async function verifyChannelById(
+	db: D1Database,
+	channelId: string,
+): Promise<SiteVerificationResult | null> {
+	const channel = await getChannelById(db, channelId);
+	if (!channel) {
+		return null;
+	}
+	const tokenRows = await listCallTokens(db, {
+		channelIds: [channelId],
+	});
+	const tokens =
+		tokenRows.length > 0
+			? tokenRows.map((row) => ({
+					id: row.id,
+					name: row.name,
+					api_key: row.api_key,
+					models_json: row.models_json ?? null,
+				}))
+			: [
+					{
+						id: "primary",
+						name: "主调用令牌",
+						api_key: String(channel.api_key ?? ""),
+						models_json: null,
+					},
+				];
+	const result = await verifySiteChannel({
+		channel,
+		tokens,
+		mode: channel.status === "disabled" ? "recovery" : "service",
+	});
+	await persistSiteVerificationResult({
+		db,
+		channel,
+		tokens,
+		result,
+	});
+	return result;
+}
+
+export async function verifySitesByIds(
+	db: D1Database,
+	ids?: string[],
+): Promise<SiteVerificationBatchResult> {
+	const allChannels = await listChannels(db, {
+		orderBy: "created_at",
+		order: "DESC",
+	});
+	const channels =
+		ids && ids.length > 0
+			? allChannels.filter((channel) => ids.includes(channel.id))
+			: allChannels.filter((channel) => channel.status === "active");
+	const tokenRows = await listCallTokens(db, {
+		channelIds: channels.map((channel) => channel.id),
+	});
+	const tokenMap = new Map<string, typeof tokenRows>();
+	for (const row of tokenRows) {
+		const list = tokenMap.get(row.channel_id) ?? [];
+		list.push(row);
+		tokenMap.set(row.channel_id, list);
+	}
+	const items: SiteVerificationResult[] = [];
+	for (const channel of channels) {
+		const channelTokens = tokenMap.get(channel.id) ?? [];
+		const tokens =
+			channelTokens.length > 0
+				? channelTokens.map((row) => ({
+						id: row.id,
+						name: row.name,
+						api_key: row.api_key,
+						models_json: row.models_json ?? null,
+					}))
+				: [
+						{
+							id: "primary",
+							name: "主调用令牌",
+							api_key: String(channel.api_key ?? ""),
+							models_json: null,
+						},
+					];
+		const result = await verifySiteChannel({
+			channel,
+			tokens,
+			mode: "service",
+		});
+		await persistSiteVerificationResult({
+			db,
+			channel,
+			tokens,
+			result,
+		});
+		items.push(result);
+	}
+	return buildVerificationBatchResult(items);
+}
 
 function createTimeoutSignal(timeoutMs: number) {
 	const controller = new AbortController();
@@ -109,10 +216,15 @@ async function callAttemptWorker<T>(
 		},
 		body: JSON.stringify(payload),
 	};
-	const executeRequest = async (): Promise<InternalWorkerResponse> =>
-		localAttemptWorkerUrl
-			? await fetch(targetUrl, requestInit)
-			: await binding!.fetch(targetUrl, requestInit as never);
+	const executeRequest = async (): Promise<InternalWorkerResponse> => {
+		if (localAttemptWorkerUrl) {
+			return await fetch(targetUrl, requestInit);
+		}
+		if (!binding) {
+			throw new Error("attempt_worker_unavailable");
+		}
+		return await binding.fetch(targetUrl, requestInit as never);
+	};
 
 	if (timeoutMs > 0) {
 		const { signal, clear } = createTimeoutSignal(timeoutMs);
@@ -167,32 +279,21 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
 	const results = new Array<R>(items.length);
 	let nextIndex = 0;
-	const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-		while (true) {
-			const current = nextIndex;
-			nextIndex += 1;
-			if (current >= items.length) {
-				return;
+	const runners = Array.from(
+		{ length: Math.max(1, Math.min(limit, items.length)) },
+		async () => {
+			while (true) {
+				const current = nextIndex;
+				nextIndex += 1;
+				if (current >= items.length) {
+					return;
+				}
+				results[current] = await worker(items[current], current);
 			}
-			results[current] = await worker(items[current], current);
-		}
-	});
+		},
+	);
 	await Promise.all(runners);
 	return results;
-}
-
-async function applyTokenModelUpdates(
-	db: D1Database,
-	tokenRows: Array<{ id: string }>,
-	items: SiteTaskTestResponse["items"],
-) {
-	const tokenIdSet = new Set(tokenRows.map((row) => row.id));
-	for (const item of items) {
-		if (!item.ok || !item.tokenId || !tokenIdSet.has(item.tokenId)) {
-			continue;
-		}
-		await updateCallTokenModels(db, item.tokenId, item.models, nowIso());
-	}
 }
 
 export async function executeSiteTestTask(
@@ -201,8 +302,12 @@ export async function executeSiteTestTask(
 	payload: SiteTaskTestRequest,
 ): Promise<SiteTaskTestResponse> {
 	const runtime = await getSiteTaskRuntime(db);
-	return dispatchWithFallback(env, runtime, "/internal/site-task/test", payload, () =>
-		testChannelTokens(payload.base_url, payload.tokens),
+	return dispatchWithFallback(
+		env,
+		runtime,
+		"/internal/site-task/test",
+		payload,
+		() => testChannelTokens(payload.base_url, payload.tokens),
 	);
 }
 
@@ -221,9 +326,15 @@ export async function executeSiteCheckinTask(
 	},
 ): Promise<SiteTaskCheckinResponse> {
 	const runtime = await getSiteTaskRuntime(db);
-	return dispatchWithFallback(env, runtime, "/internal/site-task/checkin", payload, async () => ({
-		result: await runCheckin(payload.site),
-	}));
+	return dispatchWithFallback(
+		env,
+		runtime,
+		"/internal/site-task/checkin",
+		payload,
+		async () => ({
+			result: await runCheckin(payload.site),
+		}),
+	);
 }
 
 export async function executeSiteProbeTask(
@@ -232,9 +343,18 @@ export async function executeSiteProbeTask(
 	payload: SiteTaskProbeRequest,
 ): Promise<SiteTaskProbeResponse> {
 	const runtime = await getSiteTaskRuntime(db);
-	return dispatchWithFallback(env, runtime, "/internal/site-task/probe", payload, async () => ({
-		result: await runDisabledChannelRecoveryProbe(payload.channel, payload.tokens),
-	}));
+	return dispatchWithFallback(
+		env,
+		runtime,
+		"/internal/site-task/probe",
+		payload,
+		async () => ({
+			result: await runDisabledChannelRecoveryProbe(
+				payload.channel,
+				payload.tokens,
+			),
+		}),
+	);
 }
 
 export async function runCheckinSingleViaWorker(
@@ -296,7 +416,10 @@ export async function runCheckinAllViaWorker(
 	const channels = await listChannels(db, { orderBy: "created_at" });
 	const today = beijingDateString(now);
 	const resultSlots: Array<CheckinResultItem | null> = [];
-	const pending: Array<{ slotIndex: number; channel: (typeof channels)[number] }> = [];
+	const pending: Array<{
+		slotIndex: number;
+		channel: (typeof channels)[number];
+	}> = [];
 
 	for (const channel of channels) {
 		const rawEnabled = channel.checkin_enabled ?? 0;
@@ -324,30 +447,34 @@ export async function runCheckinAllViaWorker(
 		pending.push({ slotIndex, channel });
 	}
 
-	await mapWithConcurrency(pending, runtime.concurrency, async ({ slotIndex, channel }) => {
-		const dispatched = await executeSiteCheckinTask(db, env, {
-			site: {
-				id: channel.id,
-				name: channel.name,
-				base_url: String(channel.base_url),
-				checkin_url: channel.checkin_url ?? null,
-				system_token: channel.system_token ?? null,
-				system_userid: channel.system_userid ?? null,
-			},
-		});
-		const checkinDate = dispatched.result.checkin_date ?? today;
-		await updateChannelCheckinResult(db, channel.id, {
-			last_checkin_date: checkinDate,
-			last_checkin_status: dispatched.result.status,
-			last_checkin_message: dispatched.result.message,
-			last_checkin_at: now.toISOString(),
-		});
-		resultSlots[slotIndex] = {
-			...dispatched.result,
-			checkin_date: checkinDate,
-		};
-		return null;
-	});
+	await mapWithConcurrency(
+		pending,
+		runtime.concurrency,
+		async ({ slotIndex, channel }) => {
+			const dispatched = await executeSiteCheckinTask(db, env, {
+				site: {
+					id: channel.id,
+					name: channel.name,
+					base_url: String(channel.base_url),
+					checkin_url: channel.checkin_url ?? null,
+					system_token: channel.system_token ?? null,
+					system_userid: channel.system_userid ?? null,
+				},
+			});
+			const checkinDate = dispatched.result.checkin_date ?? today;
+			await updateChannelCheckinResult(db, channel.id, {
+				last_checkin_date: checkinDate,
+				last_checkin_status: dispatched.result.status,
+				last_checkin_message: dispatched.result.message,
+				last_checkin_at: now.toISOString(),
+			});
+			resultSlots[slotIndex] = {
+				...dispatched.result,
+				checkin_date: checkinDate,
+			};
+			return null;
+		},
+	);
 
 	const results = resultSlots.filter(
 		(item): item is CheckinResultItem => item !== null,
@@ -375,7 +502,7 @@ async function markDisabledChannelRecovered(
 
 export async function recoverDisabledChannelsViaWorker(
 	db: D1Database,
-	env: Bindings,
+	_env: Bindings,
 ): Promise<DisabledChannelRecoveryBatchResult> {
 	const runtime = await getSiteTaskRuntime(db);
 	const disabledChannels = await listChannels(db, {
@@ -411,50 +538,48 @@ export async function recoverDisabledChannelsViaWorker(
 		runtime.concurrency,
 		async (channel) => {
 			const tokenRows = callTokenMap.get(channel.id) ?? [];
-			const dispatched = await executeSiteProbeTask(db, env, {
-				channel: {
-					id: channel.id,
-					name: channel.name,
-					base_url: String(channel.base_url),
-					api_key: String(channel.api_key ?? ""),
-				},
-				tokens: tokenRows.map((row) => ({
-					id: row.id,
-					name: row.name,
-					api_key: row.api_key,
-				})),
+			const tokens =
+				tokenRows.length > 0
+					? tokenRows.map((row) => ({
+							id: row.id,
+							name: row.name,
+							api_key: row.api_key,
+							models_json: row.models_json ?? null,
+						}))
+					: [
+							{
+								id: "primary",
+								name: "主调用令牌",
+								api_key: String(channel.api_key ?? ""),
+								models_json: null,
+							},
+						];
+			const verification = await verifySiteChannel({
+				channel,
+				tokens,
+				mode: "recovery",
 			});
-			const result = dispatched.result;
+			await persistSiteVerificationResult({
+				db,
+				channel,
+				tokens,
+				result: verification,
+			});
 
-			if (result.reason === "token_model_test_failed") {
-				await updateChannelTestResult(db, channel.id, {
-					ok: false,
-					elapsed: result.elapsed,
-				});
-			} else if (result.models.length > 0) {
-				await updateChannelTestResult(db, channel.id, {
-					ok: true,
-					elapsed: result.elapsed,
-					models: result.models,
-				});
-				await applyTokenModelUpdates(db, tokenRows, result.items);
-			}
-
-			const recovered = result.recovered
-				? await markDisabledChannelRecovered(db, channel.id)
-				: false;
+			const recovered =
+				verification.verdict === "recoverable"
+					? await markDisabledChannelRecovered(db, channel.id)
+					: false;
 			return {
-				attempted: result.attempted,
+				attempted: true,
 				recovered,
-				reason:
-					recovered
-						? "recovered"
-						: result.recovered
-							? "already_active"
-							: result.reason,
-				channel_id: result.channel_id,
-				channel_name: result.channel_name,
-				model: result.model,
+				reason: recovered
+					? "eligible_for_recovery"
+					: verification.stages.recovery.code,
+				channel_id: channel.id,
+				channel_name: channel.name,
+				model: verification.selected_model ?? undefined,
+				verification,
 			} satisfies DisabledChannelRecoveryResult;
 		},
 	);
