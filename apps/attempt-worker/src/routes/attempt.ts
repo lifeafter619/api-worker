@@ -39,6 +39,7 @@ const DISPATCH_ATTEMPT_INDEX_HEADER = "x-ha-dispatch-attempt-index";
 const DISPATCH_CHANNEL_ID_HEADER = "x-ha-dispatch-channel-id";
 const DISPATCH_STOP_RETRY_HEADER = "x-ha-dispatch-stop-retry";
 const DISPATCH_ERROR_ACTION_HEADER = "x-ha-dispatch-error-action";
+const CLIENT_ABORT_ERROR_CODE = "client_disconnected";
 const STREAM_OPTIONS_UNSUPPORTED_SNIPPET = "unsupported parameter";
 const STREAM_OPTIONS_PARAM_NAME = "stream_options";
 const ATTEMPT_STREAM_USAGE_PARSE_TIMEOUT_MS = 1200;
@@ -135,13 +136,28 @@ function isStreamOptionsUnsupportedMessage(message: string | null): boolean {
 	);
 }
 
-function sleep(delayMs: number): Promise<void> {
+function sleep(delayMs: number, signal?: AbortSignal | null): Promise<boolean> {
 	const safeDelay = Math.max(0, Math.floor(delayMs));
 	if (safeDelay <= 0) {
-		return Promise.resolve();
+		return Promise.resolve(!signal?.aborted);
+	}
+	if (signal?.aborted) {
+		return Promise.resolve(false);
 	}
 	return new Promise((resolve) => {
-		setTimeout(resolve, safeDelay);
+		const timer = setTimeout(() => {
+			cleanup();
+			resolve(true);
+		}, safeDelay);
+		const onAbort = () => {
+			clearTimeout(timer);
+			cleanup();
+			resolve(false);
+		};
+		const cleanup = () => {
+			signal?.removeEventListener("abort", onAbort);
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
 	});
 }
 
@@ -207,12 +223,21 @@ async function fetchWithTimeout(
 	url: string,
 	init: RequestInit,
 	timeoutMs: number,
+	signal?: AbortSignal | null,
 ): Promise<Response> {
+	if (signal?.aborted) {
+		return fetch(url, {
+			...init,
+			signal,
+		});
+	}
 	if (timeoutMs <= 0) {
-		return fetch(url, init);
+		return fetch(url, signal ? { ...init, signal } : init);
 	}
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	const onAbort = () => controller.abort(signal?.reason);
+	signal?.addEventListener("abort", onAbort, { once: true });
 	try {
 		return await fetch(url, {
 			...init,
@@ -220,6 +245,7 @@ async function fetchWithTimeout(
 		});
 	} finally {
 		clearTimeout(timer);
+		signal?.removeEventListener("abort", onAbort);
 	}
 }
 
@@ -313,6 +339,30 @@ function buildErrorResponse(
 		}),
 		{
 			status: 599,
+			headers: outHeaders,
+		},
+	);
+}
+
+function buildClientAbortResponse(
+	responsePath: string,
+	latencyMs: number,
+): Response {
+	const outHeaders = new Headers({
+		"content-type": "application/json",
+	});
+	outHeaders.set(ATTEMPT_RESPONSE_PATH_HEADER, responsePath);
+	outHeaders.set(ATTEMPT_LATENCY_HEADER, String(latencyMs));
+	outHeaders.set(ATTEMPT_ERROR_CODE_HEADER, CLIENT_ABORT_ERROR_CODE);
+	return new Response(
+		JSON.stringify({
+			error: {
+				code: CLIENT_ABORT_ERROR_CODE,
+				message: CLIENT_ABORT_ERROR_CODE,
+			},
+		}),
+		{
+			status: 499,
 			headers: outHeaders,
 		},
 	);
@@ -629,6 +679,7 @@ function preflightOpenAiToolChain(
 async function executeSingleAttempt(
 	body: AttemptRequest,
 	overrideBodyText?: string | null,
+	callerSignal?: AbortSignal | null,
 ): Promise<AttemptExecutionResult> {
 	const start = Date.now();
 	const timeoutMs = Math.max(0, Math.floor(Number(body.timeoutMs ?? 0)));
@@ -661,7 +712,12 @@ async function executeSingleAttempt(
 	}
 	requestInit.body = prepared.bodyText;
 	try {
-		let response = await fetchWithTimeout(body.target, requestInit, timeoutMs);
+		let response = await fetchWithTimeout(
+			body.target,
+			requestInit,
+			timeoutMs,
+			callerSignal,
+		);
 		if (
 			(response.status === 400 || response.status === 404) &&
 			body.fallbackTarget
@@ -670,6 +726,7 @@ async function executeSingleAttempt(
 				body.fallbackTarget,
 				requestInit,
 				timeoutMs,
+				callerSignal,
 			);
 			responsePath = body.fallbackPath?.trim() || body.fallbackTarget;
 		}
@@ -679,6 +736,13 @@ async function executeSingleAttempt(
 			latencyMs: Date.now() - start,
 		};
 	} catch (error) {
+		if (callerSignal?.aborted) {
+			return {
+				response: buildClientAbortResponse(responsePath, Date.now() - start),
+				responsePath,
+				latencyMs: Date.now() - start,
+			};
+		}
 		return {
 			response: buildErrorResponse(error, responsePath, Date.now() - start),
 			responsePath,
@@ -724,12 +788,13 @@ attempt.post("/", async (c) => {
 	if (!body?.target || !body?.method) {
 		return c.json({ error: "invalid_attempt_payload" }, 400);
 	}
-	const result = await executeSingleAttempt(body);
+	const result = await executeSingleAttempt(body, undefined, c.req.raw.signal);
 	return attachAttemptHeaders(result, body.streamUsage);
 });
 
 attempt.post("/dispatch", async (c) => {
 	const body = await c.req.json<DispatchRequest>().catch(() => null);
+	const callerSignal = c.req.raw.signal;
 	const attempts = Array.isArray(body?.attempts) ? body.attempts : [];
 	const retryConfig = normalizeRetryConfig(body?.retryConfig);
 	if (attempts.length === 0) {
@@ -747,6 +812,28 @@ attempt.post("/dispatch", async (c) => {
 		attemptIndex += 1
 	) {
 		const item = attempts[attemptIndex];
+		if (callerSignal.aborted) {
+			return attachAttemptHeaders(
+				{
+					response: buildClientAbortResponse(
+						item?.responsePath?.trim() || item?.target || "/dispatch",
+						0,
+					),
+					responsePath:
+						item?.responsePath?.trim() || item?.target || "/dispatch",
+					latencyMs: 0,
+				},
+				body?.streamUsage,
+				{
+					[DISPATCH_ATTEMPT_INDEX_HEADER]: String(
+						Math.max(0, attemptIndex - 1),
+					),
+					[DISPATCH_CHANNEL_ID_HEADER]: lastResult?.channelId ?? "",
+					[DISPATCH_STOP_RETRY_HEADER]: "1",
+					[DISPATCH_ERROR_ACTION_HEADER]: "return",
+				},
+			);
+		}
 		if (!item?.target || !item?.method) {
 			continue;
 		}
@@ -754,7 +841,7 @@ attempt.post("/dispatch", async (c) => {
 		if (channelId && blockedChannelIds.has(channelId)) {
 			continue;
 		}
-		let result = await executeSingleAttempt(item);
+		let result = await executeSingleAttempt(item, undefined, callerSignal);
 		if (
 			item.streamOptionsInjected &&
 			item.strippedBodyText &&
@@ -762,7 +849,11 @@ attempt.post("/dispatch", async (c) => {
 		) {
 			const message = await extractErrorMessage(result.response);
 			if (isStreamOptionsUnsupportedMessage(message)) {
-				result = await executeSingleAttempt(item, item.strippedBodyText);
+				result = await executeSingleAttempt(
+					item,
+					item.strippedBodyText,
+					callerSignal,
+				);
 			}
 		}
 		lastResult = {
@@ -770,6 +861,14 @@ attempt.post("/dispatch", async (c) => {
 			attemptIndex,
 			channelId,
 		};
+		if (callerSignal.aborted || result.response.status === 499) {
+			return attachAttemptHeaders(result, body?.streamUsage, {
+				[DISPATCH_ATTEMPT_INDEX_HEADER]: String(attemptIndex),
+				[DISPATCH_CHANNEL_ID_HEADER]: channelId,
+				[DISPATCH_STOP_RETRY_HEADER]: "1",
+				[DISPATCH_ERROR_ACTION_HEADER]: "return",
+			});
+		}
 		if (result.response.ok) {
 			return attachAttemptHeaders(result, body?.streamUsage, {
 				[DISPATCH_ATTEMPT_INDEX_HEADER]: String(attemptIndex),
@@ -804,9 +903,46 @@ attempt.post("/dispatch", async (c) => {
 				});
 			}
 			if (decision.sleepMs > 0) {
-				await sleep(decision.sleepMs);
+				const completedSleep = await sleep(decision.sleepMs, callerSignal);
+				if (!completedSleep) {
+					return attachAttemptHeaders(
+						{
+							response: buildClientAbortResponse(result.responsePath, 0),
+							responsePath: result.responsePath,
+							latencyMs: 0,
+						},
+						body?.streamUsage,
+						{
+							[DISPATCH_ATTEMPT_INDEX_HEADER]: String(attemptIndex),
+							[DISPATCH_CHANNEL_ID_HEADER]: channelId,
+							[DISPATCH_STOP_RETRY_HEADER]: "1",
+							[DISPATCH_ERROR_ACTION_HEADER]: "return",
+						},
+					);
+				}
 			}
 		}
+	}
+	if (callerSignal.aborted) {
+		const responsePath =
+			lastResult?.result.responsePath ??
+			attempts[0]?.responsePath?.trim() ??
+			attempts[0]?.target ??
+			"/dispatch";
+		return attachAttemptHeaders(
+			{
+				response: buildClientAbortResponse(responsePath, 0),
+				responsePath,
+				latencyMs: 0,
+			},
+			body?.streamUsage,
+			{
+				[DISPATCH_ATTEMPT_INDEX_HEADER]: String(lastResult?.attemptIndex ?? 0),
+				[DISPATCH_CHANNEL_ID_HEADER]: lastResult?.channelId ?? "",
+				[DISPATCH_STOP_RETRY_HEADER]: "1",
+				[DISPATCH_ERROR_ACTION_HEADER]: "return",
+			},
+		);
 	}
 	if (!lastResult) {
 		return c.json({ error: "dispatch_no_valid_attempt" }, 400);

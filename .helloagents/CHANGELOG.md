@@ -22,6 +22,9 @@
 
 ### 修复
 
+- **[worker/proxy]**: 修复客户端断开连接后重试链路仍可能继续执行的问题；现在本地重试与 attempt-worker 分发重试都会在调用方断链后停止后续 attempt — by lsy
+  - 方案: [202604091009_stop-retry-on-client-disconnect](archive/2026-04/202604091009_stop-retry-on-client-disconnect/)
+
 - **[proxy/sites/admin-ui]**: 修复候选站点筛选与真实模型解析口径不一致、调用 token 模型写回污染，以及使用日志缺少策略判定上下文的问题 — by Codex
   - 方案: [202604071250_candidate-routing-alignment](plan/202604071250_candidate-routing-alignment/)
 - **[worker/proxy]**: 修复渠道不支持目标模型时仍可能回退到首个已知模型并误发请求的问题；现在仅允许显式 `model_mapping` 改写模型，未命中模型的渠道会在候选筛选与实际请求阶段一并跳过 — by Codex

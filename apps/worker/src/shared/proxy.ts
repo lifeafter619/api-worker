@@ -161,6 +161,7 @@ const STREAM_USAGE_NON_ERROR_THROWN_CODE =
 	"usage_stream_parse_non_error_thrown";
 const PROXY_UPSTREAM_TIMEOUT_ERROR_CODE = "proxy_upstream_timeout";
 const PROXY_UPSTREAM_FETCH_ERROR_CODE = "proxy_upstream_fetch_exception";
+const DOWNSTREAM_CLIENT_ABORT_ERROR_CODE = "client_disconnected";
 const USAGE_ZERO_COMPLETION_TOKENS_ERROR_CODE = "usage_zero_completion_tokens";
 const ABNORMAL_SUCCESS_RESPONSE_ERROR_CODE = "abnormal_success_response";
 const UPSTREAM_STREAM_ERROR_PAYLOAD_CODE = "upstream_stream_error_payload";
@@ -1516,13 +1517,28 @@ function normalizeUpstreamErrorCode(
 	return `upstream_http_${status}`;
 }
 
-function sleep(delayMs: number): Promise<void> {
+function sleep(delayMs: number, signal?: AbortSignal | null): Promise<boolean> {
 	const safeDelay = Math.max(0, Math.floor(delayMs));
 	if (safeDelay <= 0) {
-		return Promise.resolve();
+		return Promise.resolve(!signal?.aborted);
+	}
+	if (signal?.aborted) {
+		return Promise.resolve(false);
 	}
 	return new Promise((resolve) => {
-		setTimeout(resolve, safeDelay);
+		const timer = setTimeout(() => {
+			cleanup();
+			resolve(true);
+		}, safeDelay);
+		const onAbort = () => {
+			clearTimeout(timer);
+			cleanup();
+			resolve(false);
+		};
+		const cleanup = () => {
+			signal?.removeEventListener("abort", onAbort);
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
 	});
 }
 
@@ -2154,12 +2170,21 @@ async function fetchWithTimeoutLocal(
 	url: string,
 	init: RequestInit,
 	timeoutMs: number,
+	signal?: AbortSignal | null,
 ): Promise<Response> {
+	if (signal?.aborted) {
+		return fetch(url, {
+			...init,
+			signal,
+		});
+	}
 	if (timeoutMs <= 0) {
-		return fetch(url, init);
+		return fetch(url, signal ? { ...init, signal } : init);
 	}
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	const onAbort = () => controller.abort(signal?.reason);
+	signal?.addEventListener("abort", onAbort, { once: true });
 	try {
 		return await fetch(url, {
 			...init,
@@ -2167,6 +2192,7 @@ async function fetchWithTimeoutLocal(
 		});
 	} finally {
 		clearTimeout(timer);
+		signal?.removeEventListener("abort", onAbort);
 	}
 }
 
@@ -2494,6 +2520,7 @@ async function executeDispatchViaWorker(
 	input: DispatchBindingRequest,
 	policy: AttemptBindingPolicy,
 	state: AttemptBindingState,
+	signal?: AbortSignal | null,
 ): Promise<DispatchBindingResult | null> {
 	const started = Date.now();
 	const localAttemptWorkerUrl = normalizeAttemptWorkerBaseUrl(
@@ -2520,6 +2547,7 @@ async function executeDispatchViaWorker(
 					`${localAttemptWorkerUrl}/internal/attempt/dispatch`,
 					requestInit,
 					0,
+					signal,
 				)
 			: await binding!.fetch(
 					"https://attempt-worker/internal/attempt/dispatch",
@@ -2529,7 +2557,8 @@ async function executeDispatchViaWorker(
 							"content-type": "application/json",
 						},
 						body: JSON.stringify(input),
-					},
+						signal: signal as never,
+					} as never,
 				);
 		const attemptWorkerError = await parseAttemptWorkerErrorResponse(
 			response as unknown as Response,
@@ -2578,6 +2607,9 @@ async function executeDispatchViaWorker(
 			),
 		};
 	} catch (error) {
+		if (signal?.aborted) {
+			return null;
+		}
 		const errorMessage = normalizeMessage(
 			error instanceof Error ? error.message : String(error),
 		);
@@ -2652,6 +2684,22 @@ proxy.all("/*", tokenAuth, async (c) => {
 		message: string,
 		code?: string,
 	): Response => withTraceHeader(jsonError(c, status, message, code));
+	const downstreamSignal = c.req.raw.signal;
+	const downstreamAbortResponse = (): Response =>
+		withTraceHeader(
+			new Response(
+				JSON.stringify({
+					error: DOWNSTREAM_CLIENT_ABORT_ERROR_CODE,
+					code: DOWNSTREAM_CLIENT_ABORT_ERROR_CODE,
+				}),
+				{
+					status: 499,
+					headers: {
+						"content-type": "application/json",
+					},
+				},
+			),
+		);
 	const runtimeSettings = await getProxyRuntimeSettings(db);
 	const retrySleepMs = Math.max(
 		0,
@@ -3540,13 +3588,19 @@ proxy.all("/*", tokenAuth, async (c) => {
 		attemptNumber: number,
 		action: ProxyErrorAction,
 	): Promise<boolean> => {
+		if (downstreamSignal.aborted) {
+			return false;
+		}
 		if (attemptNumber >= ordered.length) {
 			return false;
 		}
 		if (action === "sleep" && retrySleepMs > 0) {
-			await sleep(retrySleepMs);
+			const completedSleep = await sleep(retrySleepMs, downstreamSignal);
+			if (!completedSleep) {
+				return false;
+			}
 		}
-		return true;
+		return !downstreamSignal.aborted;
 	};
 	const buildDirectErrorResponse = (
 		status: number | null,
@@ -3859,7 +3913,11 @@ proxy.all("/*", tokenAuth, async (c) => {
 				},
 				attemptBindingPolicy,
 				attemptBindingState,
+				downstreamSignal,
 			);
+			if (downstreamSignal.aborted) {
+				return downstreamAbortResponse();
+			}
 			if (dispatchResult?.kind === "binding_error") {
 				recordEarlyUsage({
 					status: 503,
@@ -4399,11 +4457,17 @@ proxy.all("/*", tokenAuth, async (c) => {
 			}
 		}
 	}
+	if (downstreamSignal.aborted) {
+		return downstreamAbortResponse();
+	}
 	if (dispatchHandled && !selectedResponse && !dispatchStopRetry) {
 		dispatchHandled = false;
 	}
 	if (!dispatchHandled) {
 		for (const [attemptIndex, channel] of ordered.entries()) {
+			if (downstreamSignal.aborted) {
+				return downstreamAbortResponse();
+			}
 			if (
 				attemptIndex < attemptsExecuted ||
 				blockedChannelIds.has(channel.id)
@@ -5347,6 +5411,9 @@ proxy.all("/*", tokenAuth, async (c) => {
 					break;
 				}
 			} catch (error) {
+				if (downstreamSignal.aborted) {
+					return downstreamAbortResponse();
+				}
 				const isTimeout =
 					error instanceof Error &&
 					(error.name === "AbortError" ||
@@ -5449,6 +5516,9 @@ proxy.all("/*", tokenAuth, async (c) => {
 				}
 			}
 		}
+	}
+	if (downstreamSignal.aborted) {
+		return downstreamAbortResponse();
 	}
 
 	if (!selectedResponse) {
