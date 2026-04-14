@@ -2,6 +2,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import { safeJsonParse } from "../utils/json";
 import { nowIso } from "../utils/time";
 import { normalizeBaseUrl } from "../utils/url";
+import { selectTokenForModel } from "./channel-attemptability";
 import { updateCallTokenModels } from "./channel-call-token-repo";
 import { extractModelIds, modelsToJson } from "./channel-models";
 import { parseChannelMetadata, resolveProvider } from "./channel-metadata";
@@ -116,6 +117,7 @@ type VerificationMetadataShape = {
 
 const MINIMAL_PROBE_PROMPT = "Reply with OK.";
 const MINIMAL_PROBE_MAX_TOKENS = 8;
+const VERIFICATION_ERROR_DETAIL_MAX_LENGTH = 180;
 
 const openAiCompatibleSiteTypes = new Set<SiteType>([
 	"new-api",
@@ -207,32 +209,6 @@ function buildSummarySnapshot(
 	};
 }
 
-function normalizeTokenModels(raw?: string | null): string[] {
-	const parsed = safeJsonParse<string[] | null>(raw ?? null, null);
-	if (!Array.isArray(parsed)) {
-		return [];
-	}
-	return parsed
-		.map((item) => String(item ?? "").trim())
-		.filter((item) => item.length > 0);
-}
-
-function selectTokenForModel(
-	tokens: VerificationToken[],
-	model: string | null,
-): VerificationToken | null {
-	if (tokens.length === 0) {
-		return null;
-	}
-	if (!model) {
-		return tokens[0] ?? null;
-	}
-	const matched = tokens.find((token) =>
-		normalizeTokenModels(token.models_json).includes(model),
-	);
-	return matched ?? tokens[0] ?? null;
-}
-
 function applyQueryOverrides(
 	path: string,
 	overrides: Record<string, string>,
@@ -291,33 +267,143 @@ function collectCandidateModels(options: {
 	for (const model of extractModelIds(options.channel)) {
 		candidates.add(model);
 	}
-	for (const token of options.tokens) {
-		for (const model of normalizeTokenModels(token.models_json)) {
-			candidates.add(model);
+	const all = Array.from(candidates);
+	const selectRoutableModel = (
+		model: string | null,
+		source: string,
+	): { model: string | null; source: string; all: string[] } | null => {
+		if (!model) {
+			return null;
+		}
+		const selection = selectTokenForModel(options.tokens, model);
+		if (!selection.token) {
+			return null;
+		}
+		return { model, source, all };
+	};
+	const lastVerifiedSelection = selectRoutableModel(
+		lastVerified,
+		"last_verified_model",
+	);
+	if (lastVerifiedSelection) {
+		return lastVerifiedSelection;
+	}
+	const mappedDefaultSelection = selectRoutableModel(
+		options.mappedDefaultModel,
+		"model_mapping_default",
+	);
+	if (mappedDefaultSelection) {
+		return mappedDefaultSelection;
+	}
+	for (const model of options.discoveredModels) {
+		const discoveredSelection = selectRoutableModel(model, "discovered_models");
+		if (discoveredSelection) {
+			return discoveredSelection;
 		}
 	}
-	const all = Array.from(candidates);
-	if (lastVerified) {
-		return { model: lastVerified, source: "last_verified_model", all };
+	for (const model of all) {
+		const configuredSelection = selectRoutableModel(model, "configured_models");
+		if (configuredSelection) {
+			return configuredSelection;
+		}
 	}
-	if (options.mappedDefaultModel) {
-		return {
-			model: options.mappedDefaultModel,
-			source: "model_mapping_default",
-			all,
-		};
-	}
-	if (options.discoveredModels[0]) {
-		return {
-			model: options.discoveredModels[0],
-			source: "discovered_models",
-			all,
-		};
-	}
-	if (all[0]) {
-		return { model: all[0], source: "configured_models", all };
+	if (all.length > 0) {
+		return { model: null, source: "no_matching_call_token", all };
 	}
 	return { model: null, source: "missing_model", all };
+}
+
+function summarizeVerificationDetail(text: string | null): string | null {
+	if (!text) {
+		return null;
+	}
+	const normalized = text.replace(/\s+/gu, " ").trim();
+	if (!normalized) {
+		return null;
+	}
+	return normalized.slice(0, VERIFICATION_ERROR_DETAIL_MAX_LENGTH);
+}
+
+async function readVerificationFailureDetail(
+	response: Response,
+): Promise<string | null> {
+	const contentType = response.headers.get("content-type") ?? "";
+	if (contentType.includes("application/json")) {
+		const payload = (await response
+			.clone()
+			.json()
+			.catch(() => null)) as Record<string, unknown> | null;
+		if (payload && typeof payload === "object") {
+			const candidates = [payload.error, payload.message, payload.detail];
+			for (const candidate of candidates) {
+				if (typeof candidate === "string" && candidate.trim()) {
+					return summarizeVerificationDetail(candidate);
+				}
+				if (
+					candidate &&
+					typeof candidate === "object" &&
+					!Array.isArray(candidate)
+				) {
+					const record = candidate as Record<string, unknown>;
+					const nestedCandidates = [
+						record.message,
+						record.error,
+						record.code,
+						record.type,
+					];
+					for (const nested of nestedCandidates) {
+						if (typeof nested === "string" && nested.trim()) {
+							return summarizeVerificationDetail(nested);
+						}
+					}
+				}
+			}
+		}
+	}
+	const text = await response.text().catch(() => "");
+	return summarizeVerificationDetail(text);
+}
+
+function classifyServiceFailure(options: {
+	status: number;
+	detail: string | null;
+}): VerificationStageResult {
+	const detail = options.detail?.toLowerCase() ?? "";
+	const mentionsModel =
+		detail.includes("model") ||
+		detail.includes("deployment") ||
+		detail.includes("engine");
+	const mentionsProvider =
+		detail.includes("anthropic") ||
+		detail.includes("openai") ||
+		detail.includes("provider") ||
+		detail.includes("protocol");
+	if ((options.status === 404 || options.status === 405) && mentionsModel) {
+		return {
+			status: "fail",
+			code: "verification_model_not_supported",
+			message: "验证模型不存在、不可用，或当前令牌无权访问该模型。",
+		};
+	}
+	if ((options.status === 400 || options.status === 404) && mentionsProvider) {
+		return {
+			status: "fail",
+			code: "provider_request_invalid",
+			message: "站点已响应，但当前站点类型或请求协议与上游要求不匹配。",
+		};
+	}
+	if (options.status === 404 || options.status === 405) {
+		return {
+			status: "fail",
+			code: "endpoint_not_supported",
+			message: "上游接口存在，但当前验证端点不受支持。",
+		};
+	}
+	return {
+		status: "fail",
+		code: `upstream_http_${options.status}`,
+		message: `真实服务验证失败，HTTP ${options.status}。`,
+	};
 }
 
 function deriveSuggestedAction(
@@ -334,11 +420,16 @@ function deriveSuggestedAction(
 	}
 	if (
 		stages.service.code === "endpoint_not_supported" ||
-		stages.service.code === "service_request_build_failed"
+		stages.service.code === "service_request_build_failed" ||
+		stages.service.code === "provider_request_invalid"
 	) {
 		return "fix_endpoint";
 	}
-	if (stages.capability.code === "no_verification_model") {
+	if (
+		stages.capability.code === "no_verification_model" ||
+		stages.capability.code === "no_matching_call_token" ||
+		stages.service.code === "verification_model_not_supported"
+	) {
 		return "fix_model_config";
 	}
 	if (stages.recovery.status === "fail" || stages.service.status === "fail") {
@@ -486,15 +577,27 @@ export async function verifySiteChannel(options: {
 	selectedModel = modelSelection.model;
 	if (!selectedModel) {
 		capability.status = "fail";
-		capability.code = "no_verification_model";
-		capability.message = "未找到可用于验证的模型，请补充模型配置或模型映射。";
+		capability.code =
+			modelSelection.source === "no_matching_call_token"
+				? "no_matching_call_token"
+				: "no_verification_model";
+		capability.message =
+			modelSelection.source === "no_matching_call_token"
+				? "候选验证模型都没有可用的调用令牌，请检查令牌模型范围或站点模型配置。"
+				: "未找到可用于验证的模型，请补充模型配置或模型映射。";
 		service.status = "fail";
-		service.code = "no_verification_model";
-		service.message = "缺少验证模型，无法执行真实服务验证。";
+		service.code = capability.code;
+		service.message =
+			modelSelection.source === "no_matching_call_token"
+				? "候选验证模型都没有可用的调用令牌，无法执行真实服务验证。"
+				: "缺少验证模型，无法执行真实服务验证。";
 		if (channel.status === "disabled") {
 			recovery.status = "fail";
-			recovery.code = "no_verification_model";
-			recovery.message = "缺少验证模型，当前不能恢复。";
+			recovery.code = capability.code;
+			recovery.message =
+				modelSelection.source === "no_matching_call_token"
+					? "候选验证模型都没有可用的调用令牌，当前不能恢复。"
+					: "缺少验证模型，当前不能恢复。";
 		}
 		const summarized = summarizeVerdict(channel.status, {
 			connectivity,
@@ -538,17 +641,18 @@ export async function verifySiteChannel(options: {
 				: `${capability.message} 当前选择模型 ${selectedModel}。`;
 	}
 
-	selectedToken = selectTokenForModel(tokens, selectedModel);
+	const tokenSelection = selectTokenForModel(tokens, selectedModel);
+	selectedToken = tokenSelection.token;
 	if (!selectedToken) {
 		connectivity.status = "fail";
-		connectivity.code = "missing_token";
-		connectivity.message = "未找到可用于当前模型的调用令牌。";
+		connectivity.code = "no_matching_call_token";
+		connectivity.message = "当前验证模型没有可用的调用令牌。";
 		service.status = "fail";
-		service.code = "missing_token";
-		service.message = "未找到可用于当前模型的调用令牌。";
+		service.code = "no_matching_call_token";
+		service.message = "当前验证模型没有可用的调用令牌。";
 		if (channel.status === "disabled") {
 			recovery.status = "fail";
-			recovery.code = "missing_token";
+			recovery.code = "no_matching_call_token";
 			recovery.message = "没有匹配的调用令牌，当前不能恢复。";
 		}
 		const summarized = summarizeVerdict(channel.status, {
@@ -703,15 +807,20 @@ export async function verifySiteChannel(options: {
 			headers,
 			body: JSON.stringify(request.body),
 		});
+		const detail = response.ok
+			? "service_request_succeeded"
+			: await readVerificationFailureDetail(response);
 		trace = {
 			latency_ms: Date.now() - startedAt,
 			upstream_status: response.status,
-			detail_code: response.ok
-				? "service_request_succeeded"
-				: `upstream_http_${response.status}`,
+			detail_code: response.ok ? "service_request_succeeded" : undefined,
 			detail_message: response.ok
 				? "service_request_succeeded"
-				: `HTTP ${response.status}`,
+				: (summarizeVerificationDetail(
+						[`HTTP ${response.status}`, detail, `POST ${targetPath}`]
+							.filter(Boolean)
+							.join(" | "),
+					) ?? `HTTP ${response.status}`),
 		};
 		if (response.status === 401 || response.status === 403) {
 			connectivity.status = "fail";
@@ -721,18 +830,17 @@ export async function verifySiteChannel(options: {
 			service.code = "auth_failed";
 			service.message = "真实服务验证被上游鉴权拒绝。";
 		} else if (!response.ok) {
+			const failure = classifyServiceFailure({
+				status: response.status,
+				detail,
+			});
 			connectivity.status = "pass";
 			connectivity.code = "reachable";
 			connectivity.message = "站点可达，但服务验证返回错误。";
-			service.status = "fail";
-			service.code =
-				response.status === 404 || response.status === 405
-					? "endpoint_not_supported"
-					: `upstream_http_${response.status}`;
-			service.message =
-				response.status === 404 || response.status === 405
-					? "上游接口存在，但当前验证端点不受支持。"
-					: `真实服务验证失败，HTTP ${response.status}。`;
+			service.status = failure.status;
+			service.code = failure.code;
+			service.message = failure.message;
+			trace.detail_code = failure.code;
 		} else {
 			connectivity.status = "pass";
 			connectivity.code = "reachable";

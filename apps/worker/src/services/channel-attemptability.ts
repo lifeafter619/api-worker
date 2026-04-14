@@ -9,6 +9,13 @@ import type { ChannelRecord } from "./channel-types";
 import type { CallTokenItem } from "./call-token-selector";
 import type { EndpointType } from "./provider-transform";
 
+export type ModelScopedToken = {
+	id?: string;
+	name?: string;
+	api_key: string;
+	models_json?: string | null;
+};
+
 export type ChannelAttemptSkipReason =
 	| "missing_upstream_model"
 	| "gemini_requires_model"
@@ -31,7 +38,7 @@ export type ChannelAttemptTarget = {
 	reason: ChannelAttemptSkipReason | null;
 };
 
-function normalizeTokenModels(raw?: string | null): string[] | null {
+export function normalizeTokenModels(raw?: string | null): string[] | null {
 	if (!raw) {
 		return null;
 	}
@@ -57,11 +64,11 @@ function hashSelectionSeed(value: string): number {
 	return hash;
 }
 
-function pickTokenBySelectionKey(
-	tokens: CallTokenItem[],
+function pickTokenBySelectionKey<T extends ModelScopedToken>(
+	tokens: T[],
 	selectionKey: string | null | undefined,
 	selectionOffset = 0,
-): CallTokenItem | null {
+): T | null {
 	if (tokens.length === 0) {
 		return null;
 	}
@@ -76,12 +83,15 @@ function pickTokenBySelectionKey(
 	return tokens[index] ?? tokens[0] ?? null;
 }
 
-export function selectTokenForModel(
-	tokens: CallTokenItem[],
+export function selectTokenForModel<T extends ModelScopedToken>(
+	tokens: T[],
 	model: string | null,
 	selectionKey?: string | null,
 	selectionOffset = 0,
-): CallTokenSelection {
+): {
+	token: T | null;
+	hasModelList: boolean;
+} {
 	if (tokens.length === 0) {
 		return { token: null, hasModelList: false };
 	}
