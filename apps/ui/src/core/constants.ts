@@ -83,6 +83,7 @@ export const initialSettingsForm: SettingsForm = {
 		"responses_affinity_channel_model_unavailable",
 		"responses_affinity_channel_cooldown",
 		"responses_tool_call_chain_mismatch",
+		"invalid_encrypted_content",
 		"invalid_function_parameters",
 	],
 	proxy_zero_completion_as_error_enabled: true,

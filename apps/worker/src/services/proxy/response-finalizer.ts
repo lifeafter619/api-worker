@@ -17,7 +17,10 @@ import {
 	parseOptionalCountHeader,
 	parseOptionalLatencyHeader,
 } from "./attempt-transport";
-import { extractOpenAiResponseIdFromJson } from "./response-helpers";
+import {
+	extractOpenAiResponseIdFromJson,
+	extractOpenAiResponseIdFromSse,
+} from "./response-helpers";
 import {
 	buildAttemptFailureSummary,
 	normalizeMessage,
@@ -370,6 +373,15 @@ export async function finalizeSelectedResponse(ctx: any): Promise<Response> {
 				normalizeMessage(
 					selectedResponse.headers.get(ATTEMPT_RESPONSE_ID_HEADER),
 				) ?? null;
+			if (
+				!responseId &&
+				isStream &&
+				contentType.includes("text/event-stream")
+			) {
+				responseId = await extractOpenAiResponseIdFromSse(
+					selectedResponse.clone(),
+				);
+			}
 			if (
 				!responseId &&
 				!isStream &&

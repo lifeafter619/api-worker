@@ -36,6 +36,7 @@ const DEFAULT_PROXY_RETRY_RETURN_ERROR_CODES = [
 	"responses_affinity_channel_model_unavailable",
 	"responses_affinity_channel_cooldown",
 	"responses_tool_call_chain_mismatch",
+	"invalid_encrypted_content",
 	"invalid_function_parameters",
 ];
 const DEFAULT_CHANNEL_DISABLE_ERROR_CODES = [

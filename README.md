@@ -373,6 +373,8 @@ bun run dev -- --remote-d1
 - `GET /v1/models`：返回本站 active 渠道聚合出的 OpenAI 兼容模型列表，不请求上游；会按调用令牌的 `allowed_channels` 过滤可见模型
 - `ALL /v1/*`：除 `GET /v1/models` 外，其余请求继续走多上游代理
 - `ALL /v1beta/*`
+- Responses 兼容补充：代理会在转发前规范化 `input_image` 内容块中的图片字段（将不兼容的 `url` 纠正为 `image_url`），并在流式 `responses` 成功返回时提取 `response_id` 写入亲和缓存，减少后续 `invalid_encrypted_content` 跨渠道重试
+- `stream_options` 自动注入目前仅用于 `/v1/chat/completions` 流式请求；`/v1/responses` 会保持更接近直连的请求形状以提升兼容性
 
 鉴权与细节请以 `apps/worker/src/middleware/*` 与对应 route 实现为准。
 

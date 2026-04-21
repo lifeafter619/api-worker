@@ -87,8 +87,10 @@ import {
 import {
 	extractModelFromRawJsonRequest,
 	extractResponsesRequestHintsFromRawJsonRequest,
+	maybeParseAndSanitizeOpenAiRequestText,
 	type ResponsesRequestHints,
 	rewriteModelInRawJsonRequest,
+	sanitizeOpenAiResponsesBodyInPlace,
 } from "../../../worker/src/services/proxy/request-body";
 import {
 	buildNoRoutableChannelsMeta,
@@ -407,8 +409,17 @@ proxy.all("/*", tokenAuth, async (c) => {
 		parsedBodyInitialized && requestText
 			? safeJsonParse<Record<string, unknown> | null>(requestText, null)
 			: null;
+	if (!parsedBodyInitialized && downstreamProvider === "openai") {
+		const sanitizedRawRequest =
+			maybeParseAndSanitizeOpenAiRequestText(requestText);
+		if (sanitizedRawRequest) {
+			parsedBodyInitialized = true;
+			parsedBody = sanitizedRawRequest.body;
+		}
+	}
 	if (parsedBodyInitialized && downstreamProvider === "openai") {
 		repairOpenAiToolCallChainShared(parsedBody, endpointType);
+		sanitizeOpenAiResponsesBodyInPlace(parsedBody);
 	}
 	let responsesRequestHints =
 		parsedBodyInitialized && downstreamProvider === "openai"
@@ -441,6 +452,7 @@ proxy.all("/*", tokenAuth, async (c) => {
 			: null;
 		if (downstreamProvider === "openai") {
 			repairOpenAiToolCallChainShared(parsedBody, endpointType);
+			sanitizeOpenAiResponsesBodyInPlace(parsedBody);
 			responsesRequestHints = extractResponsesRequestHintsShared(parsedBody);
 			hasChatToolOutput = hasChatToolOutputHintShared(parsedBody);
 		}

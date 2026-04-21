@@ -11,6 +11,7 @@ import {
 	buildProviderImageRequest,
 } from "../providers/requests";
 import { rewriteModelInRawJsonRequest } from "./request-body";
+import { shouldHandleOpenAiStreamOptions } from "./stream-options";
 
 export type PreparedAttemptRequest = {
 	upstreamProvider: string;
@@ -183,11 +184,12 @@ export async function prepareAttemptRequest(options: {
 		upstreamBodyText = built.bodyText;
 	}
 
-	const shouldHandleStreamOptions =
-		upstreamProvider === "openai" &&
-		options.isStream &&
-		(options.endpointType === "chat" || options.endpointType === "responses") &&
-		!options.shouldSkipHeavyBodyParsing;
+	const shouldHandleStreamOptions = shouldHandleOpenAiStreamOptions({
+		upstreamProvider,
+		isStream: options.isStream,
+		endpointType: options.endpointType,
+		shouldSkipHeavyBodyParsing: options.shouldSkipHeavyBodyParsing,
+	});
 	let streamOptionsInjected = false;
 	let strippedStreamOptionsBodyText: string | undefined = upstreamBodyText;
 
